@@ -1,0 +1,4 @@
+#!/bin/bash
+g++ -c main.cpp Game.cpp
+g++ -g main.o Game.o -o myGame -lsfml-graphics -lsfml-window -lsfml-system
+./myGame
