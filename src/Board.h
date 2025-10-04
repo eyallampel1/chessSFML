@@ -61,6 +61,19 @@ private:
     sf::Sound moveSound;
     sf::Sound captureSound;
 
+    // Move history for undo
+    struct MoveRecord {
+        std::string from;
+        std::string to;
+        PieceType movedPiece;
+        PieceColor movedColor;
+        ChessPiece* capturedPiece;
+        bool wasCastle;
+        bool wasCheck;
+        bool whiteKCastle, whiteQCastle, blackKCastle, blackQCastle;
+    };
+    std::vector<MoveRecord> moveHistory;
+
     ChessPiece* selectedPiece;
     std::string clickedSquare;
     std::string hoveredSquare;
@@ -104,8 +117,16 @@ public:
     bool getIsCheck() const { return isCheck; }
     PieceColor getCurrentTurn() const { return currentTurn; }
 
+    // Move history
+    void undoLastMove();
+    bool canUndo() const { return !moveHistory.empty(); }
+
     // FEN export
     std::string getFEN() const;
+
+    // PGN export/import
+    std::string getPGN() const;
+    void loadPGN(const std::string& pgn);
 };
 
 #endif /* BOARD_H */

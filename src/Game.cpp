@@ -9,6 +9,11 @@
 #include <SFML/Window/WindowStyle.hpp>
 #include <cstdlib>
 #include <string>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <windows.h>
+#include <commdlg.h>
 
 Game::Game(){
 	this->initWindow();
@@ -16,7 +21,7 @@ Game::Game(){
 
 	// Initialize engine components
 	engine = new StockfishEngine();
-	evalBar = new EvalBar(this->window, &font, 360, 0, 40, 352);
+	evalBar = new EvalBar(this->window, &font, 352, 0, 40, 352);  // Moved to right of board
 	arrowManager = new ArrowManager(this->window);
 	engineInitialized = false;
 	analysisRequested = false;
@@ -24,6 +29,12 @@ Game::Game(){
 
 	// Initialize engine in background
 	initEngine();
+
+	// Initialize UI buttons
+	initButtons();
+
+	// Initialize status message
+	statusMessage = "";
 }
 
 Game::~Game(){
@@ -31,19 +42,27 @@ Game::~Game(){
 	delete engine;
 	delete evalBar;
 	delete arrowManager;
+
+	// Clean up buttons
+	for (auto btn : buttons) {
+		delete btn;
+	}
 }
 
 void Game::run(){
 	while (this->window->isOpen()) {
-		//clear screen
-		std::cout << "\033[2J\033[1;1H";
+		// Don't clear console so we can see button messages
+		// std::cout << "\033[2J\033[1;1H";
 		//std::system("clear");
-		this->printMousePosition();
+		this->printMousePosition();  // MUST call this to update userWantedString!
 		this->updateDt();
 		this->processEvents();
 
 		// Update hovered square continuously while mouse is moved
 		board->updateHoveredSquare(userWantedString);
+
+		// Update buttons
+		updateButtons();
 
 		// Check for analysis updates periodically (non-blocking)
 		if (engineInitialized && analysisRequested && analysisClock.getElapsedTime().asMilliseconds() > 500) {
@@ -51,6 +70,9 @@ void Game::run(){
 			auto lines = engine->getBestLines(3);
 
 			if (!lines.empty()) {
+				// Store lines for display
+				currentLines = lines;
+
 				// Update eval bar
 				evalBar->setEvaluation(lines[0].score);
 
@@ -107,13 +129,19 @@ void Game::render(){
 		evalBar->render();
 	}
 
+	// Render UI
+	renderUI();
+
+	// Render analysis panel
+	renderAnalysisPanel();
+
 	this->window->display();
 }
 
 
 void Game::updateDt(){
 	dt=dtClock.restart().asSeconds();
-	std::cout << dt << std::endl;
+	// std::cout << dt << std::endl;  // Commented out to avoid spam
 }
 
 void Game::centerWindow(){
@@ -129,9 +157,9 @@ void Game::centerWindow(){
 
 
 void Game::initWindow(){
-	// Increased width to accommodate eval bar (352 + 40 + 82 = 474)
-	this->window=new sf::RenderWindow(sf::VideoMode(474,352),
-			"lampel",sf::Style::Titlebar|sf::Style::Close);
+	// Window size: 352 (board) + 40 (eval bar) + 200 (UI panel) = 592 width, 450 height for buttons
+	this->window=new sf::RenderWindow(sf::VideoMode(592, 450),
+			"Chess - Stockfish Analysis",sf::Style::Titlebar|sf::Style::Close);
 	this->centerWindow();
 	this->window->setFramerateLimit(120);
 	this->window->setVerticalSyncEnabled(true);
@@ -140,13 +168,13 @@ void Game::initWindow(){
 
 void Game::printMousePosition(){
 	position = sf::Mouse::getPosition(*window);
-	std::cout<<"mouse position x="<<position.x<<std::endl;
-	std::cout<<"mouse position y="<<position.y<<std::endl;
+	// std::cout<<"mouse position x="<<position.x<<std::endl;  // Commented out to avoid spam
+	// std::cout<<"mouse position y="<<position.y<<std::endl;  // Commented out to avoid spam
 	convertMousePositionToCordinate();
 }
 
 void Game::processEvents(){
-	std::cout<< "inside process Events" << std::endl;
+	// std::cout<< "inside process Events" << std::endl;  // Commented out to avoid spam
 	while( this->window->pollEvent(event)){
 
 		// Close window : exit
@@ -161,17 +189,32 @@ void Game::processEvents(){
 
 		if(event.type == sf::Event::MouseButtonPressed)
 		{
-			// Left click - pick up piece
-			if (event.mouseButton.button == sf::Mouse::Left) {
-				board->handleClick(userWantedString);
-				startingPosition=userWantedString+"->";
-				remainWithThisColor=false;
+			sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
+
+			// Check button clicks first
+			bool buttonClicked = false;
+			for (auto btn : buttons) {
+				if (btn->contains(mousePos)) {
+					btn->handleClick(mousePos);
+					buttonClicked = true;
+					break;
+				}
 			}
-			// Right click - cancel move
-			else if (event.mouseButton.button == sf::Mouse::Right) {
-				board->handleRightClick();
-				remainWithThisColor=true;
-				printSecTextLine=false;
+
+			// Only process board clicks if no button was clicked
+			if (!buttonClicked) {
+				// Left click - pick up piece
+				if (event.mouseButton.button == sf::Mouse::Left) {
+					board->handleClick(userWantedString);
+					startingPosition=userWantedString+"->";
+					remainWithThisColor=false;
+				}
+				// Right click - cancel move
+				else if (event.mouseButton.button == sf::Mouse::Right) {
+					board->handleRightClick();
+					remainWithThisColor=true;
+					printSecTextLine=false;
+				}
 			}
 		}
 		if(event.type == sf::Event::MouseButtonReleased)
@@ -200,43 +243,43 @@ void Game::convertMousePositionToCordinate(){
 
 		if(position.x>0 && position.x<45 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "A" <<8-i<< std::endl;
+			// std::cout << "A" <<8-i<< std::endl;
 			userWantedString="A"+std::to_string(8-i);
 		}
 
 		if(position.x>45 && position.x<45*2 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "B" <<8-i<< std::endl;
+			// std::cout << "B" <<8-i<< std::endl;
 			userWantedString="B"+std::to_string(8-i);
 		}
 		if(position.x>45*2 && position.x<45*3 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "C" <<8-i<< std::endl;
+			// std::cout << "C" <<8-i<< std::endl;
 			userWantedString="C"+std::to_string(8-i);
 		}
 		if(position.x>45*3 && position.x<45*4 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "D" <<8-i<< std::endl;
+			// std::cout << "D" <<8-i<< std::endl;
 			userWantedString="D"+std::to_string(8-i);
 		}
 		if(position.x>45*4 && position.x<45*5 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "E" <<8-i<< std::endl;
+			// std::cout << "E" <<8-i<< std::endl;
 			userWantedString="E"+std::to_string(8-i);
 		}
 		if(position.x>45*5 && position.x<45*6 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "F" <<8-i<< std::endl;
+			// std::cout << "F" <<8-i<< std::endl;
 			userWantedString="F"+std::to_string(8-i);
 		}
 		if(position.x>44*6 && position.x<44*7 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "G" <<8-i<< std::endl;
+			// std::cout << "G" <<8-i<< std::endl;
 			userWantedString="G"+std::to_string(8-i);
 		}
 		if(position.x>44*7 && position.x<44*8 && position.y >i*45 && position.y<(i+1)*45)
 		{
-			std::cout << "H" <<8-i<< std::endl;
+			// std::cout << "H" <<8-i<< std::endl;
 			userWantedString="H"+std::to_string(8-i);
 		}
 
@@ -276,7 +319,7 @@ void Game::renderText(sf::Color color,int yPosition,std::string textToRender){
 
 	// set the color
 	text.setFillColor(color);
-	text.setPosition(360,yPosition);
+	text.setPosition(400, yPosition + 150);  // Position in UI panel below buttons
 	text.setStyle(sf::Text::Bold); //| sf::Text::Underlined);
 	this->window->draw(text);
 
@@ -333,6 +376,263 @@ void Game::handleKeyboard(sf::Event::KeyEvent key) {
 			std::cout << "Arrows toggled" << std::endl;
 		}
 	}
+}
+
+void Game::initButtons() {
+	// Load font for buttons
+	if (!font.loadFromFile("C:/Windows/Fonts/arial.ttf")) {
+		font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf");
+	}
+
+	// UI panel starts at x=392 (352 board + 40 eval bar)
+	float panelX = 392.0f;
+	float buttonWidth = 180.0f;
+	float buttonHeight = 35.0f;
+	float spacing = 10.0f;
+
+	// Undo button
+	undoButton = new Button(window, &font, "Undo", panelX + 10, 10, buttonWidth, buttonHeight);
+	undoButton->setOnClick([this]() {
+		if (board->canUndo()) {
+			board->undoLastMove();
+			updateAnalysis();
+			setStatusMessage("Move undone");
+			std::cout << "Move undone" << std::endl;
+		} else {
+			setStatusMessage("No moves to undo");
+			std::cout << "No moves to undo" << std::endl;
+		}
+	});
+	buttons.push_back(undoButton);
+
+	// Save PGN button
+	savePgnButton = new Button(window, &font, "Save PGN", panelX + 10, 10 + buttonHeight + spacing, buttonWidth, buttonHeight);
+	savePgnButton->setOnClick([this]() {
+		try {
+			std::cout << "Save PGN clicked - opening file dialog..." << std::endl;
+			std::string filePath = saveFileDialog();
+
+			if (filePath.empty()) {
+				std::cout << "Save cancelled by user" << std::endl;
+				setStatusMessage("Save cancelled");
+				return;
+			}
+
+			std::cout << "Saving to: " << filePath << std::endl;
+			std::string pgn = board->getPGN();
+
+			std::ofstream file(filePath, std::ios::out | std::ios::trunc);
+			if (file.is_open()) {
+				file << pgn;
+				file.flush();
+				file.close();
+				setStatusMessage("Game saved!");
+				std::cout << "SUCCESS: Game saved to " << filePath << std::endl;
+			} else {
+				setStatusMessage("Save failed!");
+				std::cout << "ERROR: Could not open file for writing" << std::endl;
+			}
+		} catch (const std::exception& e) {
+			setStatusMessage("Save error!");
+			std::cout << "EXCEPTION in Save PGN: " << e.what() << std::endl;
+		}
+	});
+	buttons.push_back(savePgnButton);
+
+	// Load PGN button
+	loadPgnButton = new Button(window, &font, "Load PGN", panelX + 10, 10 + (buttonHeight + spacing) * 2, buttonWidth, buttonHeight);
+	loadPgnButton->setOnClick([this]() {
+		try {
+			std::cout << "Load PGN clicked - opening file dialog..." << std::endl;
+			std::string filePath = openFileDialog();
+
+			if (filePath.empty()) {
+				std::cout << "Load cancelled by user" << std::endl;
+				setStatusMessage("Load cancelled");
+				return;
+			}
+
+			std::cout << "Loading from: " << filePath << std::endl;
+			std::ifstream file(filePath);
+			if (file.is_open()) {
+				std::cout << "File opened, reading..." << std::endl;
+				std::string pgn((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+				file.close();
+				std::cout << "File read, loading into board..." << std::endl;
+				board->loadPGN(pgn);
+				setStatusMessage("Game loaded!");
+				std::cout << "SUCCESS: PGN loaded from " << filePath << std::endl;
+				updateAnalysis();
+			} else {
+				setStatusMessage("File open failed!");
+				std::cout << "ERROR: Could not open " << filePath << std::endl;
+			}
+		} catch (const std::exception& e) {
+			setStatusMessage("Load error!");
+			std::cout << "EXCEPTION in Load PGN: " << e.what() << std::endl;
+		}
+	});
+	buttons.push_back(loadPgnButton);
+}
+
+void Game::updateButtons() {
+	sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
+	for (auto btn : buttons) {
+		btn->update(mousePos);
+	}
+}
+
+void Game::renderUI() {
+	// Draw UI panel background
+	sf::RectangleShape panel;
+	panel.setSize(sf::Vector2f(200.0f, 450.0f));
+	panel.setPosition(392.0f, 0.0f);
+	panel.setFillColor(sf::Color(30, 30, 30));
+	window->draw(panel);
+
+	// Render buttons
+	for (auto btn : buttons) {
+		btn->render();
+	}
+
+	// Render status message (fades after 3 seconds)
+	if (!statusMessage.empty() && statusClock.getElapsedTime().asSeconds() < 3.0f) {
+		sf::Text statusText;
+		statusText.setFont(font);
+		statusText.setString(statusMessage);
+		statusText.setCharacterSize(18);
+		statusText.setFillColor(sf::Color::Green);
+		statusText.setPosition(400.0f, 180.0f);
+		window->draw(statusText);
+	}
+}
+
+void Game::setStatusMessage(const std::string& message) {
+	statusMessage = message;
+	statusClock.restart();
+}
+
+void Game::renderAnalysisPanel() {
+	if (!engineInitialized || currentLines.empty()) return;
+
+	// Analysis panel background - below the board
+	sf::RectangleShape panel;
+	panel.setSize(sf::Vector2f(352.0f, 98.0f));  // Board width, space below board
+	panel.setPosition(0.0f, 352.0f);
+	panel.setFillColor(sf::Color(20, 20, 20));
+	window->draw(panel);
+
+	// Get current turn - we'll show evaluation from their perspective
+	PieceColor currentTurn = board->getCurrentTurn();
+
+	// Render each line
+	float yOffset = 360.0f;
+	for (size_t i = 0; i < currentLines.size() && i < 3; i++) {
+		const EngineLine& line = currentLines[i];
+
+		// Line number indicator
+		sf::CircleShape indicator(8.0f);
+		indicator.setPosition(8.0f, yOffset + 4.0f);
+		if (i == 0) indicator.setFillColor(sf::Color(0, 200, 0));      // Green
+		else if (i == 1) indicator.setFillColor(sf::Color(200, 200, 0)); // Yellow
+		else indicator.setFillColor(sf::Color(255, 165, 0));            // Orange
+		window->draw(indicator);
+
+		// Evaluation text
+		sf::Text evalText;
+		evalText.setFont(font);
+		evalText.setCharacterSize(14);
+		evalText.setFillColor(sf::Color::White);
+
+		// Show from current player's perspective
+		// Stockfish gives White's perspective, so flip if it's Black's turn
+		int displayScore = line.score;
+		if (currentTurn == PieceColor::BLACK) {
+			displayScore = -displayScore;
+		}
+
+		std::ostringstream evalStr;
+		if (std::abs(displayScore) >= 10000) {
+			evalStr << "M" << (displayScore > 0 ? "+" : "-");
+		} else {
+			float pawns = displayScore / 100.0f;
+			evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pawns;
+		}
+
+		evalText.setString(evalStr.str());
+		evalText.setPosition(25.0f, yOffset);
+		window->draw(evalText);
+
+		// Move sequence (first 5 moves)
+		sf::Text movesText;
+		movesText.setFont(font);
+		movesText.setCharacterSize(13);
+		movesText.setFillColor(sf::Color(180, 180, 180));
+
+		std::ostringstream movesStr;
+		for (size_t j = 0; j < line.pv.size() && j < 5; j++) {
+			std::string move = line.pv[j];
+			// Convert UCI to readable (just show the move)
+			if (move.length() >= 4) {
+				std::string from = move.substr(0, 2);
+				std::string to = move.substr(2, 2);
+				from[0] = toupper(from[0]);
+				to[0] = toupper(to[0]);
+				movesStr << from << to;
+				if (j < line.pv.size() - 1 && j < 4) movesStr << " ";
+			}
+		}
+		movesText.setString(movesStr.str());
+		movesText.setPosition(80.0f, yOffset);
+		window->draw(movesText);
+
+		yOffset += 30.0f;
+	}
+}
+
+std::string Game::openFileDialog() {
+	OPENFILENAMEA ofn;
+	char szFile[260] = { 0 };
+
+	ZeroMemory(&ofn, sizeof(ofn));
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = window->getSystemHandle();
+	ofn.lpstrFile = szFile;
+	ofn.nMaxFile = sizeof(szFile);
+	ofn.lpstrFilter = "PGN Files (*.pgn)\0*.pgn\0All Files (*.*)\0*.*\0";
+	ofn.nFilterIndex = 1;
+	ofn.lpstrFileTitle = NULL;
+	ofn.nMaxFileTitle = 0;
+	ofn.lpstrInitialDir = NULL;
+	ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+	if (GetOpenFileNameA(&ofn) == TRUE) {
+		return std::string(ofn.lpstrFile);
+	}
+	return "";
+}
+
+std::string Game::saveFileDialog() {
+	OPENFILENAMEA ofn;
+	char szFile[260] = "game.pgn";
+
+	ZeroMemory(&ofn, sizeof(ofn));
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = window->getSystemHandle();
+	ofn.lpstrFile = szFile;
+	ofn.nMaxFile = sizeof(szFile);
+	ofn.lpstrFilter = "PGN Files (*.pgn)\0*.pgn\0All Files (*.*)\0*.*\0";
+	ofn.nFilterIndex = 1;
+	ofn.lpstrFileTitle = NULL;
+	ofn.nMaxFileTitle = 0;
+	ofn.lpstrInitialDir = NULL;
+	ofn.lpstrDefExt = "pgn";
+	ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+
+	if (GetSaveFileNameA(&ofn) == TRUE) {
+		return std::string(ofn.lpstrFile);
+	}
+	return "";
 }
 
 

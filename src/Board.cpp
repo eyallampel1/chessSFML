@@ -452,6 +452,21 @@ void Board::handleRelease(const std::string& square) {
                 }
             }
 
+            // Record move in history
+            MoveRecord record;
+            record.from = clickedSquare;
+            record.to = square;
+            record.movedPiece = selectedPiece->type;
+            record.movedColor = selectedPiece->color;
+            record.capturedPiece = capturedPiece;
+            record.wasCastle = false;
+            record.wasCheck = isCheck;
+            record.whiteKCastle = whiteKingsideCastle;
+            record.whiteQCastle = whiteQueensideCastle;
+            record.blackKCastle = blackKingsideCastle;
+            record.blackQCastle = blackQueensideCastle;
+            moveHistory.push_back(record);
+
             // Move the piece
             selectedPiece->position = square;
             std::cout << "Moved to " << square << std::endl;
@@ -702,3 +717,4 @@ void Board::executeCastle(PieceColor color, bool kingside) {
 
     std::cout << "Castled " << (kingside ? "kingside" : "queenside") << std::endl;
 }
+

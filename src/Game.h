@@ -4,6 +4,7 @@
 #include "StockfishEngine.h"
 #include "EvalBar.h"
 #include "Arrow.h"
+#include "Button.h"
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/Font.hpp>
@@ -12,6 +13,7 @@
 #include <SFML/System/Clock.hpp>
 #include <iostream>
 #include <string>
+#include <vector>
 
 class Game
 {
@@ -41,7 +43,20 @@ class Game
 		ArrowManager* arrowManager;
 		bool engineInitialized;
 		bool analysisRequested;
-		std::string lastAnalyzedFEN; 
+		std::string lastAnalyzedFEN;
+
+		// UI Buttons
+		std::vector<Button*> buttons;
+		Button* undoButton;
+		Button* savePgnButton;
+		Button* loadPgnButton;
+
+		// Status message
+		std::string statusMessage;
+		sf::Clock statusClock;
+
+		// Engine lines for display
+		std::vector<EngineLine> currentLines; 
 	public:
 
 		Game();
@@ -63,6 +78,17 @@ class Game
 		void initEngine();
 		void updateAnalysis();
 		void handleKeyboard(sf::Event::KeyEvent key);
+
+		// UI methods
+		void initButtons();
+		void updateButtons();
+		void renderUI();
+		void renderAnalysisPanel();
+		void setStatusMessage(const std::string& message);
+
+		// File dialog helpers
+		std::string openFileDialog();
+		std::string saveFileDialog();
 
 };
 

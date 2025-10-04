@@ -100,6 +100,8 @@
     <ClCompile Include="src\StockfishEngine.cpp" />
     <ClCompile Include="src\EvalBar.cpp" />
     <ClCompile Include="src\Arrow.cpp" />
+    <ClCompile Include="src\Button.cpp" />
+    <ClCompile Include="src\BoardHistory.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Board.h" />
@@ -111,6 +113,7 @@
     <ClInclude Include="src\StockfishEngine.h" />
     <ClInclude Include="src\EvalBar.h" />
     <ClInclude Include="src\Arrow.h" />
+    <ClInclude Include="src\Button.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
