@@ -5,6 +5,8 @@
 #include <SFML/Graphics/Sprite.hpp>
 #include <SFML/Graphics/Texture.hpp>
 #include <SFML/System/Vector2.hpp>
+#include <SFML/Audio/SoundBuffer.hpp>
+#include <SFML/Audio/Sound.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -41,17 +43,35 @@ private:
     sf::RenderWindow* window;
     sf::Texture chessBoardTexture;
     sf::Sprite chessBoardSprite;
-    sf::Texture chessPiecesTexture;
-    sf::Sprite chessPiecesSprite;
+
+    // Individual piece textures
+    sf::Texture whitePawnTexture, whiteKnightTexture, whiteBishopTexture;
+    sf::Texture whiteRookTexture, whiteQueenTexture, whiteKingTexture;
+    sf::Texture blackPawnTexture, blackKnightTexture, blackBishopTexture;
+    sf::Texture blackRookTexture, blackQueenTexture, blackKingTexture;
+
+    sf::Sprite pieceSprite;
 
     std::vector<ChessPiece> pieces;
     Coordinate spriteCoordinate;
 
-    sf::IntRect rectSprite;
-    sf::Vector2u imageCount;
+    // Sound effects
+    sf::SoundBuffer moveSoundBuffer;
+    sf::SoundBuffer captureSoundBuffer;
+    sf::Sound moveSound;
+    sf::Sound captureSound;
 
     ChessPiece* selectedPiece;
     std::string clickedSquare;
+    std::string hoveredSquare;
+    PieceColor currentTurn;
+    bool isCheck;
+
+    // Castling rights
+    bool whiteKingsideCastle;
+    bool whiteQueensideCastle;
+    bool blackKingsideCastle;
+    bool blackQueensideCastle;
 
     enum State { INITIAL, PIECE_CLICKED, PIECE_RELEASED };
     State currentState;
@@ -63,6 +83,13 @@ private:
     void renderPiece(const ChessPiece& piece, int x, int y);
     ChessPiece* getPieceAt(const std::string& position);
     bool isMoveLegal(const ChessPiece& piece, const std::string& from, const std::string& to);
+    bool isPathClear(const std::string& from, const std::string& to);
+    bool isSquareUnderAttack(const std::string& square, PieceColor byColor);
+    std::string findKing(PieceColor color);
+    bool isKingInCheck(PieceColor kingColor);
+    bool wouldMoveCauseCheck(ChessPiece* piece, const std::string& from, const std::string& to);
+    bool canCastle(PieceColor color, bool kingside);
+    void executeCastle(PieceColor color, bool kingside);
 
 public:
     Board(sf::RenderWindow* window);
@@ -71,7 +98,10 @@ public:
     void render();
     void handleClick(const std::string& square);
     void handleRelease(const std::string& square);
+    void updateHoveredSquare(const std::string& square);
     void setState(State state);
+    bool getIsCheck() const { return isCheck; }
+    PieceColor getCurrentTurn() const { return currentTurn; }
 };
 
 #endif /* BOARD_H */

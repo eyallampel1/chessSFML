@@ -27,6 +27,10 @@ void Game::run(){
 		this->printMousePosition();
 		this->updateDt();
 		this->processEvents();
+
+		// Update hovered square continuously while mouse is moved
+		board->updateHoveredSquare(userWantedString);
+
 		this->render();
 	}
 
@@ -43,6 +47,11 @@ void Game::render(){
 	}
 	if(printSecTextLine){
 		this->renderText(sf::Color::Red,42,startingPosition+endPosition);
+	}
+
+	// Display CHECK! message if in check
+	if (board->getIsCheck()) {
+		this->renderText(sf::Color::Red, 70, "CHECK!");
 	}
 
 	this->window->display();
