@@ -29,3 +29,7 @@ puzzel_lichess/
 # Misc local files
 gdbSession
 myVimSession.vim
+
+# Windows reserved names artifacts
+nul
+CON
