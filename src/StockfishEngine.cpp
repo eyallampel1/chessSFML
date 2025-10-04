@@ -212,6 +212,9 @@ std::vector<EngineLine> StockfishEngine::getBestLines(int count) {
     for (const auto& line : outputLines) {
         if (line.find("info") == 0 && line.find("pv") != std::string::npos) {
             EngineLine engineLine;
+            engineLine.score = 0;
+            engineLine.depth = 0;
+            engineLine.mate = 0;
             std::istringstream iss(line);
             std::string token;
 
@@ -224,10 +227,12 @@ std::vector<EngineLine> StockfishEngine::getBestLines(int count) {
                     iss >> token; // "cp" or "mate"
                     if (token == "cp") {
                         iss >> engineLine.score;
+                        engineLine.mate = 0; // not a mate score
                     }
                     else if (token == "mate") {
                         int mateIn;
                         iss >> mateIn;
+                        engineLine.mate = mateIn; // store plies directly
                         engineLine.score = (mateIn > 0) ? 10000 : -10000;
                     }
                 }

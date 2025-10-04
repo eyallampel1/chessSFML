@@ -14,6 +14,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <utility>
 
 class Game
 {
@@ -44,12 +45,16 @@ class Game
 		bool engineInitialized;
 		bool analysisRequested;
 		std::string lastAnalyzedFEN;
+        bool gameOver = false;
 
 		// UI Buttons
 		std::vector<Button*> buttons;
 		Button* undoButton;
 		Button* savePgnButton;
 		Button* loadPgnButton;
+        Button* newGameButton;
+        Button* puzzleModeButton;
+        Button* nextPuzzleButton;
 
 		// Status message
 		std::string statusMessage;
@@ -85,10 +90,29 @@ class Game
 		void renderUI();
 		void renderAnalysisPanel();
 		void setStatusMessage(const std::string& message);
+        void renderCheckmateBanner();
+
+        // Puzzle mode state
+        bool puzzleMode = false;
+        bool puzzleSolved = false;
+        sf::Clock puzzleSolvedClock;
+        // Puzzle metadata (headers and key-value pairs for display)
+        std::vector<std::string> puzzleHeaders;
+        std::vector<std::pair<std::string, std::string>> puzzleMetaKVs;
+        // Promotion dialog state
+        bool promotionOpen = false;
+        void renderPromotionDialog();
+        std::string puzzleFilePath;
+        std::vector<std::string> puzzleMoves;
+        size_t puzzleIndex = 0; // index into puzzleMoves
+        bool loadRandomPuzzle();
+        void renderPuzzleSolvedBanner();
+        void renderPuzzleMetadataPanel();
 
 		// File dialog helpers
 		std::string openFileDialog();
 		std::string saveFileDialog();
+        std::string openCSVFileDialog();
 
 };
 

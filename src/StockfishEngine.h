@@ -10,6 +10,7 @@ struct EngineLine {
     std::vector<std::string> pv; // Principal variation (sequence of moves)
     int score;                  // Evaluation in centipawns (+100 = +1.0 pawn advantage)
     int depth;                  // Search depth
+    int mate;                   // Mate in plies (0 = checkmate on board, >0 side to move mates in N plies, <0 side to move is mated in N plies)
 };
 
 class StockfishEngine {

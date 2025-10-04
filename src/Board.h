@@ -69,8 +69,12 @@ private:
         PieceColor movedColor;
         ChessPiece* capturedPiece;
         bool wasCastle;
+        bool wasEnPassant;           // en passant capture occurred
+        bool wasPromotion;           // pawn promotion occurred
+        PieceType promotionType;     // to what piece
         bool wasCheck;
         bool whiteKCastle, whiteQCastle, blackKCastle, blackQCastle;
+        std::string prevEnPassantTarget; // previous en passant target square or "-"
     };
     std::vector<MoveRecord> moveHistory;
 
@@ -85,6 +89,10 @@ private:
     bool whiteQueensideCastle;
     bool blackKingsideCastle;
     bool blackQueensideCastle;
+
+    // Game state flags
+    bool checkmateFlag = false;
+    bool stalemateFlag = false;
 
     enum State { INITIAL, PIECE_CLICKED, PIECE_RELEASED };
     State currentState;
@@ -103,12 +111,19 @@ private:
     bool wouldMoveCauseCheck(ChessPiece* piece, const std::string& from, const std::string& to);
     bool canCastle(PieceColor color, bool kingside);
     void executeCastle(PieceColor color, bool kingside);
+    bool isEnPassantCapture(const ChessPiece& piece, const std::string& from, const std::string& to) const;
+    std::string enPassantTarget = "-"; // target square in algebraic (e.g., "E3") or "-"
+    bool hasAnyLegalMove(PieceColor color);
 
 public:
     Board(sf::RenderWindow* window);
     ~Board();
 
     void render();
+    void reset();
+    bool setFEN(const std::string& fen); // Load position from FEN
+    std::string getLastMoveUCI() const;  // Return last move in UCI (e2e4), empty if none
+    bool applyUCIMove(const std::string& uci); // Programmatically perform a move like "e2e4"; returns true on success
     void handleClick(const std::string& square);
     void handleRelease(const std::string& square);
     void handleRightClick();
@@ -116,10 +131,15 @@ public:
     void setState(State state);
     bool getIsCheck() const { return isCheck; }
     PieceColor getCurrentTurn() const { return currentTurn; }
+    bool getIsCheckmate() const { return checkmateFlag; }
+    bool getIsStalemate() const { return stalemateFlag; }
 
     // Move history
     void undoLastMove();
     bool canUndo() const { return !moveHistory.empty(); }
+    size_t getMoveCount() const { return moveHistory.size(); }
+    bool setLastMovePromotion(PieceType promoteTo);
+    PieceType getPieceTypeAt(const std::string& square) const;
 
     // FEN export
     std::string getFEN() const;

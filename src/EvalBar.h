@@ -18,6 +18,11 @@ private:
     float evaluation; // In centipawns (-1000 to 1000, clamped to -1000/+1000 for display)
     bool isVisible;
 
+    // Mate display state
+    bool mateMode = false;      // true when showing a mate score
+    int matePliesStored = 0;    // mate distance in plies
+    bool mateWhiteWinning = false; // who is winning in mate
+
     int barWidth;
     int barHeight;
     int posX;
@@ -30,6 +35,7 @@ public:
     EvalBar(sf::RenderWindow* window, sf::Font* font, int x, int y, int width, int height);
 
     void setEvaluation(float centipawns);
+    void setMateEvaluation(int matePlies, bool whiteWinning);
     void setVisible(bool visible);
     void toggleVisibility();
     bool getVisible() const { return isVisible; }

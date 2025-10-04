@@ -3,40 +3,7 @@
 #include <sstream>
 #include <fstream>
 
-void Board::undoLastMove() {
-    if (moveHistory.empty()) {
-        std::cout << "No moves to undo" << std::endl;
-        return;
-    }
-
-    MoveRecord lastMove = moveHistory.back();
-    moveHistory.pop_back();
-
-    // Find and move piece back
-    ChessPiece* piece = getPieceAt(lastMove.to);
-    if (piece) {
-        piece->position = lastMove.from;
-    }
-
-    // Restore captured piece if any
-    if (lastMove.capturedPiece) {
-        lastMove.capturedPiece->isActive = true;
-    }
-
-    // Restore castling rights
-    whiteKingsideCastle = lastMove.whiteKCastle;
-    whiteQueensideCastle = lastMove.whiteQCastle;
-    blackKingsideCastle = lastMove.blackKCastle;
-    blackQueensideCastle = lastMove.blackQCastle;
-
-    // Restore check state
-    isCheck = lastMove.wasCheck;
-
-    // Switch turn back
-    currentTurn = lastMove.movedColor;
-
-    std::cout << "Undone move: " << lastMove.from << " to " << lastMove.to << std::endl;
-}
+// undoLastMove is implemented in Board.cpp with full en passant/promotion handling
 
 std::string Board::getPGN() const {
     std::ostringstream pgn;

@@ -47,6 +47,7 @@ float EvalBar::evalToBarHeight(float eval) const {
 }
 
 void EvalBar::setEvaluation(float centipawns) {
+    mateMode = false;
     evaluation = centipawns;
 
     float barFill = evalToBarHeight(centipawns);
@@ -63,26 +64,53 @@ void EvalBar::setEvaluation(float centipawns) {
         whiteBar.setSize(sf::Vector2f(static_cast<float>(barWidth), 0.0f));
     }
 
-    // Update text
+    // Update text (centipawn mode)
     if (font) {
         std::ostringstream oss;
         float pawns = centipawns / 100.0f;
 
-        if (std::abs(centipawns) >= 10000) {
-            // Mate score
-            oss << "M";
+        oss << std::fixed << std::setprecision(1);
+        if (pawns >= 0) {
+            oss << "+" << pawns;
         } else {
-            oss << std::fixed << std::setprecision(1);
-            if (pawns >= 0) {
-                oss << "+" << pawns;
-            } else {
-                oss << pawns;
-            }
+            oss << pawns;
         }
 
         evalText.setString(oss.str());
 
         // Center text in the bar
+        sf::FloatRect textBounds = evalText.getLocalBounds();
+        evalText.setPosition(
+            static_cast<float>(posX) + (static_cast<float>(barWidth) - textBounds.width) / 2.0f,
+            static_cast<float>(posY + barHeight - 25)
+        );
+    }
+}
+
+void EvalBar::setMateEvaluation(int matePlies, bool whiteWinning) {
+    mateMode = true;
+    matePliesStored = matePlies;
+    mateWhiteWinning = whiteWinning;
+
+    // Fill bar to extreme based on who is winning (from White's POV)
+    float barFill = static_cast<float>(barHeight) / 2.0f; // max half height
+    if (whiteWinning) {
+        whiteBar.setSize(sf::Vector2f(static_cast<float>(barWidth), barFill));
+        whiteBar.setPosition(static_cast<float>(posX), static_cast<float>(posY + barHeight / 2) - barFill);
+        blackBar.setSize(sf::Vector2f(static_cast<float>(barWidth), 0.0f));
+    } else {
+        blackBar.setSize(sf::Vector2f(static_cast<float>(barWidth), barFill));
+        blackBar.setPosition(static_cast<float>(posX), static_cast<float>(posY + barHeight / 2));
+        whiteBar.setSize(sf::Vector2f(static_cast<float>(barWidth), 0.0f));
+    }
+
+    // Text: show mate distance in MOVES (convert from plies)
+    if (font) {
+        int moves = (std::abs(matePlies) + 1) / 2; // ceil(|plies| / 2)
+        std::ostringstream oss;
+        oss << "M" << moves;
+        evalText.setString(oss.str());
+
         sf::FloatRect textBounds = evalText.getLocalBounds();
         evalText.setPosition(
             static_cast<float>(posX) + (static_cast<float>(barWidth) - textBounds.width) / 2.0f,

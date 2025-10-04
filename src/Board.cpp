@@ -4,6 +4,8 @@
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Window/Mouse.hpp>
 #include <iostream>
+#include <cctype>
+#include <sstream>
 
 Board::Board(sf::RenderWindow* window)
     : window(window), selectedPiece(nullptr), currentState(INITIAL), hoveredSquare(""), currentTurn(PieceColor::WHITE), isCheck(false),
@@ -27,6 +29,153 @@ Board::Board(sf::RenderWindow* window)
 }
 
 Board::~Board() {
+}
+
+void Board::reset() {
+    // Reset board state to initial game
+    selectedPiece = nullptr;
+    clickedSquare.clear();
+    hoveredSquare.clear();
+    currentTurn = PieceColor::WHITE;
+    isCheck = false;
+    whiteKingsideCastle = whiteQueensideCastle = true;
+    blackKingsideCastle = blackQueensideCastle = true;
+    enPassantTarget = "-";
+    checkmateFlag = false;
+    stalemateFlag = false;
+    moveHistory.clear();
+
+    initializePieces();
+}
+
+static PieceType pieceTypeFromChar(char c) {
+    switch (std::tolower(c)) {
+        case 'p': return PieceType::PAWN;
+        case 'n': return PieceType::KNIGHT;
+        case 'b': return PieceType::BISHOP;
+        case 'r': return PieceType::ROOK;
+        case 'q': return PieceType::QUEEN;
+        case 'k': return PieceType::KING;
+        default:  return PieceType::NONE;
+    }
+}
+
+bool Board::setFEN(const std::string& fen) {
+    // Expect: piece placement / active color / castling / en passant / halfmove / fullmove
+    std::istringstream iss(fen);
+    std::string placement, active, castling, ep, half, full;
+    if (!(iss >> placement >> active >> castling >> ep >> half >> full)) {
+        std::cout << "Invalid FEN: " << fen << std::endl;
+        return false;
+    }
+
+    // Reset state
+    pieces.clear();
+    moveHistory.clear();
+    selectedPiece = nullptr;
+    clickedSquare.clear();
+    hoveredSquare.clear();
+    checkmateFlag = false;
+    stalemateFlag = false;
+    isCheck = false;
+
+    // Piece placement
+    int rank = 8;
+    int fileIndex = 0; // 0..7 for A..H
+    for (size_t i = 0; i < placement.size(); ++i) {
+        char c = placement[i];
+        if (c == '/') {
+            rank--;
+            fileIndex = 0;
+            continue;
+        }
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            fileIndex += c - '0';
+            continue;
+        }
+        if (fileIndex > 7 || rank < 1) {
+            std::cout << "Invalid FEN board placement bounds" << std::endl;
+            return false;
+        }
+        PieceType pt = pieceTypeFromChar(c);
+        PieceColor pc = std::isupper(static_cast<unsigned char>(c)) ? PieceColor::WHITE : PieceColor::BLACK;
+        char fileChar = static_cast<char>('A' + fileIndex);
+        std::string pos = std::string(1, fileChar) + std::to_string(rank);
+        if (pt != PieceType::NONE) {
+            pieces.emplace_back(pt, pc, pos);
+        }
+        fileIndex++;
+    }
+
+    // Active color
+    currentTurn = (active == "w") ? PieceColor::WHITE : PieceColor::BLACK;
+
+    // Castling rights
+    whiteKingsideCastle  = castling.find('K') != std::string::npos;
+    whiteQueensideCastle = castling.find('Q') != std::string::npos;
+    blackKingsideCastle  = castling.find('k') != std::string::npos;
+    blackQueensideCastle = castling.find('q') != std::string::npos;
+
+    // En passant
+    if (ep == "-") enPassantTarget = "-";
+    else {
+        // Convert to uppercase file
+        if (ep.size() >= 2) {
+            std::string upp = ep;
+            upp[0] = std::toupper(static_cast<unsigned char>(upp[0]));
+            enPassantTarget = upp;
+        } else {
+            enPassantTarget = "-";
+        }
+    }
+
+    return true;
+}
+
+std::string Board::getLastMoveUCI() const {
+    if (moveHistory.empty()) return std::string();
+    const auto& r = moveHistory.back();
+    if (r.from.size() < 2 || r.to.size() < 2) return std::string();
+    std::string from = r.from; std::string to = r.to;
+    from[0] = std::tolower(static_cast<unsigned char>(from[0]));
+    to[0] = std::tolower(static_cast<unsigned char>(to[0]));
+    std::string uci = from + to;
+    if (r.wasPromotion) {
+        char promo = 'q';
+        switch (r.promotionType) {
+            case PieceType::QUEEN: promo = 'q'; break;
+            case PieceType::ROOK: promo = 'r'; break;
+            case PieceType::BISHOP: promo = 'b'; break;
+            case PieceType::KNIGHT: promo = 'n'; break;
+            default: promo = 'q'; break;
+        }
+        uci.push_back(promo);
+    }
+    return uci;
+}
+
+bool Board::applyUCIMove(const std::string& uci) {
+    if (uci.size() < 4) return false;
+    std::string from;
+    from.push_back(std::toupper(static_cast<unsigned char>(uci[0])));
+    from.push_back(uci[1]);
+    std::string to;
+    to.push_back(std::toupper(static_cast<unsigned char>(uci[2])));
+    to.push_back(uci[3]);
+    size_t prev = moveHistory.size();
+    handleClick(from);
+    handleRelease(to);
+    bool ok = moveHistory.size() > prev;
+    if (ok && uci.size() >= 5) {
+        char pc = std::tolower(static_cast<unsigned char>(uci[4]));
+        PieceType pt = PieceType::QUEEN;
+        if (pc == 'q') pt = PieceType::QUEEN;
+        else if (pc == 'r') pt = PieceType::ROOK;
+        else if (pc == 'b') pt = PieceType::BISHOP;
+        else if (pc == 'n') pt = PieceType::KNIGHT;
+        setLastMovePromotion(pt);
+    }
+    return ok;
 }
 
 void Board::loadTextures() {
@@ -265,7 +414,11 @@ bool Board::isMoveLegal(const ChessPiece& piece, const std::string& from, const 
                     if (direction == 1) return true;
                 }
                 // Diagonal capture
-                if (fileDiff == 1 && direction == 1 && targetPiece) return true;
+                if (fileDiff == 1 && direction == 1) {
+                    if (targetPiece) return true;
+                    // En passant capture to empty square if matches enPassantTarget
+                    if (enPassantTarget != "-" && to == enPassantTarget) return true;
+                }
             } else {
                 // Black pawns move down (decreasing rank)
                 int direction = startRank - endRank;
@@ -277,7 +430,11 @@ bool Board::isMoveLegal(const ChessPiece& piece, const std::string& from, const 
                     if (direction == 1) return true;
                 }
                 // Diagonal capture
-                if (fileDiff == 1 && direction == 1 && targetPiece) return true;
+                if (fileDiff == 1 && direction == 1) {
+                    if (targetPiece) return true;
+                    // En passant capture to empty square if matches enPassantTarget
+                    if (enPassantTarget != "-" && to == enPassantTarget) return true;
+                }
             }
             return false;
         }
@@ -368,6 +525,8 @@ void Board::handleRelease(const std::string& square) {
                 if (canCastle(selectedPiece->color, kingside)) {
                     executeCastle(selectedPiece->color, kingside);
                     moveSound.play();
+                    // En passant target invalidated after any legal move
+                    enPassantTarget = "-";
 
                     // Remove castling rights for this color
                     if (selectedPiece->color == PieceColor::WHITE) {
@@ -410,8 +569,18 @@ void Board::handleRelease(const std::string& square) {
                 return;
             }
 
-            // Check if capturing
+            // Check if capturing (including en passant)
             ChessPiece* capturedPiece = getPieceAt(square);
+            bool wasEnPassant = false;
+            if (!capturedPiece && selectedPiece->type == PieceType::PAWN && isEnPassantCapture(*selectedPiece, clickedSquare, square)) {
+                // En passant capture: captured pawn is behind 'to' square
+                char file = square[0];
+                int rank = square[1] - '0';
+                int capRank = (selectedPiece->color == PieceColor::WHITE) ? (rank - 1) : (rank + 1);
+                std::string capSquare = std::string(1, file) + std::to_string(capRank);
+                capturedPiece = getPieceAt(capSquare);
+                wasEnPassant = (capturedPiece != nullptr);
+            }
             if (capturedPiece) {
                 std::cout << "Captured " << (capturedPiece->color == PieceColor::WHITE ? "white " : "black ");
                 switch (capturedPiece->type) {
@@ -460,16 +629,33 @@ void Board::handleRelease(const std::string& square) {
             record.movedColor = selectedPiece->color;
             record.capturedPiece = capturedPiece;
             record.wasCastle = false;
+            record.wasEnPassant = wasEnPassant;
+            record.wasPromotion = false;
+            record.promotionType = PieceType::NONE;
             record.wasCheck = isCheck;
             record.whiteKCastle = whiteKingsideCastle;
             record.whiteQCastle = whiteQueensideCastle;
             record.blackKCastle = blackKingsideCastle;
             record.blackQCastle = blackQueensideCastle;
+            record.prevEnPassantTarget = enPassantTarget;
             moveHistory.push_back(record);
 
             // Move the piece
             selectedPiece->position = square;
             std::cout << "Moved to " << square << std::endl;
+
+            // Update en passant target: only set when a pawn moves two squares; otherwise clear
+            {
+                char sFile = clickedSquare[0];
+                int sRank = clickedSquare[1] - '0';
+                char tFile = square[0];
+                int tRank = square[1] - '0';
+                enPassantTarget = "-";
+                if (selectedPiece->type == PieceType::PAWN && sFile == tFile && std::abs(tRank - sRank) == 2) {
+                    int epRank = (selectedPiece->color == PieceColor::WHITE) ? (sRank + 1) : (sRank - 1);
+                    enPassantTarget = std::string(1, tFile) + std::to_string(epRank);
+                }
+            }
 
             // Switch turn after successful move
             currentTurn = (currentTurn == PieceColor::WHITE) ? PieceColor::BLACK : PieceColor::WHITE;
@@ -478,6 +664,19 @@ void Board::handleRelease(const std::string& square) {
             isCheck = isKingInCheck(currentTurn);
             if (isCheck) {
                 std::cout << "CHECK! " << (currentTurn == PieceColor::WHITE ? "White" : "Black") << " king is in check!" << std::endl;
+            }
+
+            // Determine checkmate/stalemate for side to move
+            checkmateFlag = false;
+            stalemateFlag = false;
+            if (!hasAnyLegalMove(currentTurn)) {
+                if (isCheck) {
+                    checkmateFlag = true;
+                    std::cout << "CHECKMATE!" << std::endl;
+                } else {
+                    stalemateFlag = true;
+                    std::cout << "STALEMATE!" << std::endl;
+                }
             }
 
             std::cout << "It's now " << (currentTurn == PieceColor::WHITE ? "white" : "black") << "'s turn" << std::endl;
@@ -489,6 +688,26 @@ void Board::handleRelease(const std::string& square) {
         hoveredSquare = "";
         currentState = INITIAL;
     }
+}
+
+bool Board::hasAnyLegalMove(PieceColor color) {
+    // Brute-force: try all moves for all pieces of 'color'
+    for (auto& piece : pieces) {
+        if (!piece.isActive || piece.color != color) continue;
+        std::string from = piece.position;
+        for (char file = 'A'; file <= 'H'; ++file) {
+            for (int rank = 1; rank <= 8; ++rank) {
+                std::string to = std::string(1, file) + std::to_string(rank);
+                if (from == to) continue;
+                if (isMoveLegal(piece, from, to)) {
+                    if (!wouldMoveCauseCheck(&piece, from, to)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
 }
 
 void Board::handleRightClick() {
@@ -577,8 +796,16 @@ std::string Board::getFEN() const {
     if (castling.empty()) castling = "-";
     fen += castling;
 
-    // 4. En passant target square (not implemented yet, always -)
-    fen += " -";
+    // 4. En passant target square
+    fen += ' ';
+    if (enPassantTarget.empty() || enPassantTarget == "-") {
+        fen += "-";
+    } else {
+        // FEN uses lowercase files and ranks
+        std::string ep = enPassantTarget;
+        ep[0] = tolower(ep[0]);
+        fen += ep;
+    }
 
     // 5. Halfmove clock (not tracked yet, default to 0)
     fen += " 0";
@@ -624,7 +851,21 @@ bool Board::wouldMoveCauseCheck(ChessPiece* piece, const std::string& from, cons
     // Simulate the move temporarily
     std::string originalPos = piece->position;
     ChessPiece* capturedPiece = getPieceAt(to);
+    ChessPiece* epCaptured = nullptr;
     bool capturedWasActive = false;
+
+    // Handle en passant simulation (capture is not on 'to' square)
+    if (!capturedPiece && piece->type == PieceType::PAWN && isEnPassantCapture(*piece, from, to)) {
+        // Determine the captured pawn square relative to 'to'
+        char file = to[0];
+        int rank = to[1] - '0';
+        int capRank = (piece->color == PieceColor::WHITE) ? (rank - 1) : (rank + 1);
+        std::string capSquare = std::string(1, file) + std::to_string(capRank);
+        epCaptured = getPieceAt(capSquare);
+        if (epCaptured) {
+            capturedPiece = epCaptured;
+        }
+    }
 
     if (capturedPiece) {
         capturedWasActive = capturedPiece->isActive;
@@ -643,6 +884,22 @@ bool Board::wouldMoveCauseCheck(ChessPiece* piece, const std::string& from, cons
     }
 
     return causesCheck;
+}
+
+bool Board::isEnPassantCapture(const ChessPiece& piece, const std::string& from, const std::string& to) const {
+    if (enPassantTarget == "-" || piece.type != PieceType::PAWN) return false;
+    if (to != enPassantTarget) return false;
+    // Must be a diagonal step by 1 rank towards opponent
+    int startRank = (int)from.at(1) - '0';
+    int endRank = (int)to.at(1) - '0';
+    char startFile = from.at(0);
+    char endFile = to.at(0);
+    int fileDiff = std::abs(endFile - startFile);
+    if (piece.color == PieceColor::WHITE) {
+        return (endRank - startRank == 1) && (fileDiff == 1);
+    } else {
+        return (startRank - endRank == 1) && (fileDiff == 1);
+    }
 }
 
 bool Board::canCastle(PieceColor color, bool kingside) {
@@ -716,5 +973,70 @@ void Board::executeCastle(PieceColor color, bool kingside) {
     if (rook) rook->position = rookEnd;
 
     std::cout << "Castled " << (kingside ? "kingside" : "queenside") << std::endl;
+}
+
+void Board::undoLastMove() {
+    if (moveHistory.empty()) return;
+    MoveRecord rec = moveHistory.back();
+    moveHistory.pop_back();
+
+    // Find moved piece at destination
+    ChessPiece* moved = getPieceAt(rec.to);
+    if (!moved) {
+        for (auto& p : pieces) {
+            if (p.isActive && p.color == rec.movedColor && p.position == rec.to) { moved = &p; break; }
+        }
+    }
+    if (moved) {
+        if (rec.wasPromotion) moved->type = PieceType::PAWN;
+        moved->position = rec.from;
+    }
+
+    // Restore captured piece, including en passant square
+    if (rec.capturedPiece) {
+        rec.capturedPiece->isActive = true;
+        if (rec.wasEnPassant) {
+            char file = rec.to[0];
+            int rank = rec.to[1] - '0';
+            int capRank = (rec.movedColor == PieceColor::WHITE) ? (rank - 1) : (rank + 1);
+            rec.capturedPiece->position = std::string(1, file) + std::to_string(capRank);
+        } else {
+            rec.capturedPiece->position = rec.to;
+        }
+    }
+
+    // Restore rights and ep target
+    whiteKingsideCastle = rec.whiteKCastle;
+    whiteQueensideCastle = rec.whiteQCastle;
+    blackKingsideCastle = rec.blackKCastle;
+    blackQueensideCastle = rec.blackQCastle;
+    enPassantTarget = rec.prevEnPassantTarget;
+
+    // Switch turn back
+    currentTurn = (currentTurn == PieceColor::WHITE) ? PieceColor::BLACK : PieceColor::WHITE;
+    isCheck = isKingInCheck(currentTurn);
+    checkmateFlag = false;
+    stalemateFlag = false;
+}
+
+bool Board::setLastMovePromotion(PieceType promoteTo) {
+    if (moveHistory.empty()) return false;
+    MoveRecord& rec = moveHistory.back();
+    ChessPiece* moved = getPieceAt(rec.to);
+    if (!moved) return false;
+    if (moved->type != PieceType::PAWN) return false;
+    int toRank = rec.to[1] - '0';
+    if (!((moved->color == PieceColor::WHITE && toRank == 8) || (moved->color == PieceColor::BLACK && toRank == 1))) return false;
+    moved->type = promoteTo;
+    rec.wasPromotion = true;
+    rec.promotionType = promoteTo;
+    return true;
+}
+
+PieceType Board::getPieceTypeAt(const std::string& square) const {
+    for (const auto& p : pieces) {
+        if (p.isActive && p.position == square) return p.type;
+    }
+    return PieceType::NONE;
 }
 
