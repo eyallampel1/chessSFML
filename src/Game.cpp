@@ -9,31 +9,14 @@
 #include <SFML/Window/WindowStyle.hpp>
 #include <cstdlib>
 #include <string>
-#include "Pawn.h"
-#include "Piece.h"
-
-
-#define STATE_INITIAL 0
-#define STATE_PIECE_CLICKED 1
-#define STATE_PIECE_RELEASED 2
 
 Game::Game(){
 	this->initWindow();
-	//this->myPiece=new Piece(this->window);
-	
-
-//	currentState=initial;
-
-	pMyPawn=new Pawn(this->window,this->window);
-	myPiece=pMyPawn;
-	//initial state
-		myPiece->setCurrentState(STATE_INITIAL);	
-
+	board = new Board(this->window);
 }
 
 Game::~Game(){
-
-
+	delete board;
 }
 
 void Game::run(){
@@ -51,8 +34,8 @@ void Game::run(){
 
 void Game::render(){
 	this->window->clear();
-	this->myPiece->render();
-	if (remainWithThisColor) {	
+	this->board->render();
+	if (remainWithThisColor) {
 		this->renderText();
 	}
 	else {
@@ -63,8 +46,6 @@ void Game::render(){
 	}
 
 	this->window->display();
-
-
 }
 
 
@@ -110,25 +91,17 @@ void Game::processEvents(){
 			this->window->close();
 		if(event.type == sf::Event::MouseButtonPressed)
 		{
-		myPiece->setCurrentState(STATE_PIECE_CLICKED );	
-		//userWantedString is the startingPosition without ->
-			myPiece->clickedCoardinate(userWantedString);
-			startingPosition=userWantedString+"->";	
+			board->handleClick(userWantedString);
+			startingPosition=userWantedString+"->";
 			remainWithThisColor=false;
 		}
 		if(event.type == sf::Event::MouseButtonReleased)
 		{
 			endPosition=userWantedString;
+			board->handleRelease(endPosition);
 			remainWithThisColor=true;
 			printSecTextLine=true;
-	//	myPiece->setCurrentState(STATE_INITIAL);	
-	
-		myPiece->releasedCoardinate(endPosition);
-		myPiece->setCurrentState(STATE_PIECE_RELEASED);	
-
 		}
-
-
 	}
 }
 
@@ -199,7 +172,10 @@ void Game::renderText(sf::Color color,int yPosition){
 
 void Game::renderText(sf::Color color,int yPosition,std::string textToRender){
 
-	font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf");
+	// Try Windows font first, fall back to Linux path
+	if (!font.loadFromFile("C:/Windows/Fonts/arial.ttf")) {
+		font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf");
+	}
 
 	// select the font
 	text.setFont(font); // font is a sf::Font

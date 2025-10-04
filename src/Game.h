@@ -1,7 +1,6 @@
 #ifndef GAME_H
 #define GAME_H
-#include "Piece.h"
-#include "Pawn.h"
+#include "Board.h"
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/Font.hpp>
@@ -15,7 +14,7 @@ class Game
 {
 	private:
 		//render text stuff
-		sf::Font font; 
+		sf::Font font;
 		sf::Text text;
 		std::string userWantedString;
 		std::string startingPosition;
@@ -23,13 +22,9 @@ class Game
 		bool remainWithThisColor=true;
 		bool printSecTextLine=false;
 
-		//enum state{initial,pieceClicked};
-		//state currentState;
-
-		Piece* myPiece;
-		Pawn* pMyPawn;
-		sf::RenderWindow* window;	
-		sf::VideoMode desktop; 
+		Board* board;
+		sf::RenderWindow* window;
+		sf::VideoMode desktop;
 		sf::Vector2i getWindow;
 		sf::Event event;
 		sf::Clock dtClock;

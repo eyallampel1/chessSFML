@@ -1,0 +1,20 @@
+# Build artifacts
+build/bin/*.exe
+build/bin/*.dll
+build/bin/*.pdb
+build/obj/
+*.o
+*.d
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+
+# Executables
+runner
+*.exe
