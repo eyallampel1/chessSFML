@@ -97,6 +97,9 @@
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\Pawn.cpp" />
     <ClCompile Include="src\Piece.cpp" />
+    <ClCompile Include="src\StockfishEngine.cpp" />
+    <ClCompile Include="src\EvalBar.cpp" />
+    <ClCompile Include="src\Arrow.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Board.h" />
@@ -105,6 +108,9 @@
     <ClInclude Include="src\Game.h" />
     <ClInclude Include="src\Pawn.h" />
     <ClInclude Include="src\Piece.h" />
+    <ClInclude Include="src\StockfishEngine.h" />
+    <ClInclude Include="src\EvalBar.h" />
+    <ClInclude Include="src\Arrow.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

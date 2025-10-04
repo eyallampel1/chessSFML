@@ -98,10 +98,14 @@ public:
     void render();
     void handleClick(const std::string& square);
     void handleRelease(const std::string& square);
+    void handleRightClick();
     void updateHoveredSquare(const std::string& square);
     void setState(State state);
     bool getIsCheck() const { return isCheck; }
     PieceColor getCurrentTurn() const { return currentTurn; }
+
+    // FEN export
+    std::string getFEN() const;
 };
 
 #endif /* BOARD_H */

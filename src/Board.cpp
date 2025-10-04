@@ -476,6 +476,19 @@ void Board::handleRelease(const std::string& square) {
     }
 }
 
+void Board::handleRightClick() {
+    // Cancel the current move if a piece is selected
+    if (currentState == PIECE_CLICKED && selectedPiece) {
+        std::cout << "Move cancelled - piece returned to " << clickedSquare << std::endl;
+
+        // Reset state
+        selectedPiece = nullptr;
+        hoveredSquare = "";
+        clickedSquare = "";
+        currentState = INITIAL;
+    }
+}
+
 void Board::updateHoveredSquare(const std::string& square) {
     if (currentState == PIECE_CLICKED) {
         hoveredSquare = square;
@@ -484,6 +497,81 @@ void Board::updateHoveredSquare(const std::string& square) {
 
 void Board::setState(State state) {
     currentState = state;
+}
+
+std::string Board::getFEN() const {
+    // FEN format: piece placement / active color / castling / en passant / halfmove / fullmove
+    std::string fen;
+
+    // 1. Piece placement (from rank 8 to rank 1)
+    for (int rank = 8; rank >= 1; rank--) {
+        int emptyCount = 0;
+        for (char file = 'A'; file <= 'H'; file++) {
+            std::string square = std::string(1, file) + std::to_string(rank);
+            ChessPiece* piece = const_cast<Board*>(this)->getPieceAt(square);
+
+            if (piece) {
+                if (emptyCount > 0) {
+                    fen += std::to_string(emptyCount);
+                    emptyCount = 0;
+                }
+
+                // Add piece character
+                char pieceChar;
+                switch (piece->type) {
+                    case PieceType::PAWN:   pieceChar = 'p'; break;
+                    case PieceType::KNIGHT: pieceChar = 'n'; break;
+                    case PieceType::BISHOP: pieceChar = 'b'; break;
+                    case PieceType::ROOK:   pieceChar = 'r'; break;
+                    case PieceType::QUEEN:  pieceChar = 'q'; break;
+                    case PieceType::KING:   pieceChar = 'k'; break;
+                    default: pieceChar = '?';
+                }
+
+                // White pieces are uppercase
+                if (piece->color == PieceColor::WHITE) {
+                    pieceChar = toupper(pieceChar);
+                }
+
+                fen += pieceChar;
+            } else {
+                emptyCount++;
+            }
+        }
+
+        if (emptyCount > 0) {
+            fen += std::to_string(emptyCount);
+        }
+
+        if (rank > 1) {
+            fen += '/';
+        }
+    }
+
+    // 2. Active color
+    fen += ' ';
+    fen += (currentTurn == PieceColor::WHITE) ? 'w' : 'b';
+
+    // 3. Castling availability
+    fen += ' ';
+    std::string castling;
+    if (whiteKingsideCastle) castling += 'K';
+    if (whiteQueensideCastle) castling += 'Q';
+    if (blackKingsideCastle) castling += 'k';
+    if (blackQueensideCastle) castling += 'q';
+    if (castling.empty()) castling = "-";
+    fen += castling;
+
+    // 4. En passant target square (not implemented yet, always -)
+    fen += " -";
+
+    // 5. Halfmove clock (not tracked yet, default to 0)
+    fen += " 0";
+
+    // 6. Fullmove number (simplified, always 1 for now)
+    fen += " 1";
+
+    return fen;
 }
 
 std::string Board::findKing(PieceColor color) {

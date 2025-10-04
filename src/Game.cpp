@@ -13,10 +13,24 @@
 Game::Game(){
 	this->initWindow();
 	board = new Board(this->window);
+
+	// Initialize engine components
+	engine = new StockfishEngine();
+	evalBar = new EvalBar(this->window, &font, 360, 0, 40, 352);
+	arrowManager = new ArrowManager(this->window);
+	engineInitialized = false;
+	analysisRequested = false;
+	lastAnalyzedFEN = "";
+
+	// Initialize engine in background
+	initEngine();
 }
 
 Game::~Game(){
 	delete board;
+	delete engine;
+	delete evalBar;
+	delete arrowManager;
 }
 
 void Game::run(){
@@ -31,6 +45,34 @@ void Game::run(){
 		// Update hovered square continuously while mouse is moved
 		board->updateHoveredSquare(userWantedString);
 
+		// Check for analysis updates periodically (non-blocking)
+		if (engineInitialized && analysisRequested && analysisClock.getElapsedTime().asMilliseconds() > 500) {
+			// Get best lines without blocking
+			auto lines = engine->getBestLines(3);
+
+			if (!lines.empty()) {
+				// Update eval bar
+				evalBar->setEvaluation(lines[0].score);
+
+				// Update arrows
+				arrowManager->clearArrows();
+				for (size_t i = 0; i < lines.size() && i < 3; i++) {
+					if (lines[i].pv.size() >= 1) {
+						std::string move = lines[i].pv[0];
+						if (move.length() >= 4) {
+							std::string from = move.substr(0, 2);
+							std::string to = move.substr(2, 2);
+							from[0] = toupper(from[0]);
+							to[0] = toupper(to[0]);
+							arrowManager->addArrow(from, to, i);
+						}
+					}
+				}
+			}
+
+			analysisRequested = false;
+		}
+
 		this->render();
 	}
 
@@ -39,6 +81,12 @@ void Game::run(){
 void Game::render(){
 	this->window->clear();
 	this->board->render();
+
+	// Render arrows (behind pieces)
+	if (arrowManager) {
+		arrowManager->render();
+	}
+
 	if (remainWithThisColor) {
 		this->renderText();
 	}
@@ -52,6 +100,11 @@ void Game::render(){
 	// Display CHECK! message if in check
 	if (board->getIsCheck()) {
 		this->renderText(sf::Color::Red, 70, "CHECK!");
+	}
+
+	// Render eval bar
+	if (evalBar) {
+		evalBar->render();
 	}
 
 	this->window->display();
@@ -76,6 +129,7 @@ void Game::centerWindow(){
 
 
 void Game::initWindow(){
+	// Increased width to accommodate eval bar (352 + 40 + 82 = 474)
 	this->window=new sf::RenderWindow(sf::VideoMode(474,352),
 			"lampel",sf::Style::Titlebar|sf::Style::Close);
 	this->centerWindow();
@@ -98,18 +152,44 @@ void Game::processEvents(){
 		// Close window : exit
 		if (event.type == sf::Event::Closed)
 			this->window->close();
+
+		// Keyboard events
+		if (event.type == sf::Event::KeyPressed)
+		{
+			handleKeyboard(event.key);
+		}
+
 		if(event.type == sf::Event::MouseButtonPressed)
 		{
-			board->handleClick(userWantedString);
-			startingPosition=userWantedString+"->";
-			remainWithThisColor=false;
+			// Left click - pick up piece
+			if (event.mouseButton.button == sf::Mouse::Left) {
+				board->handleClick(userWantedString);
+				startingPosition=userWantedString+"->";
+				remainWithThisColor=false;
+			}
+			// Right click - cancel move
+			else if (event.mouseButton.button == sf::Mouse::Right) {
+				board->handleRightClick();
+				remainWithThisColor=true;
+				printSecTextLine=false;
+			}
 		}
 		if(event.type == sf::Event::MouseButtonReleased)
 		{
-			endPosition=userWantedString;
-			board->handleRelease(endPosition);
-			remainWithThisColor=true;
-			printSecTextLine=true;
+			// Only process left mouse button release
+			if (event.mouseButton.button == sf::Mouse::Left) {
+				endPosition=userWantedString;
+				board->handleRelease(endPosition);
+				remainWithThisColor=true;
+				printSecTextLine=true;
+
+				// Trigger analysis update after move (non-blocking)
+				std::string currentFEN = board->getFEN();
+				if (currentFEN != lastAnalyzedFEN) {
+					updateAnalysis();
+					lastAnalyzedFEN = currentFEN;
+				}
+			}
 		}
 	}
 }
@@ -200,6 +280,59 @@ void Game::renderText(sf::Color color,int yPosition,std::string textToRender){
 	text.setStyle(sf::Text::Bold); //| sf::Text::Underlined);
 	this->window->draw(text);
 
+}
+
+void Game::initEngine() {
+	std::cout << "Initializing Stockfish engine..." << std::endl;
+
+	// Try to initialize engine (path relative to executable)
+	if (engine->initialize("engines/stockfish.exe")) {
+		engineInitialized = true;
+		std::cout << "Engine initialized successfully!" << std::endl;
+
+		// Start initial analysis
+		updateAnalysis();
+	} else {
+		std::cout << "Failed to initialize engine. Analysis features disabled." << std::endl;
+		engineInitialized = false;
+	}
+}
+
+void Game::updateAnalysis() {
+	if (!engineInitialized) return;
+
+	// Get current position from board
+	std::string fen = board->getFEN();
+
+	// Send position to engine
+	engine->sendPosition(fen);
+
+	// Start analysis (depth 15, 3 lines) - NON-BLOCKING
+	engine->startAnalysis(15, 3);
+
+	// Mark that we've requested analysis and restart timer
+	analysisRequested = true;
+	analysisClock.restart();
+
+	std::cout << "Analysis started (non-blocking)" << std::endl;
+}
+
+void Game::handleKeyboard(sf::Event::KeyEvent key) {
+	// E key - toggle eval bar
+	if (key.code == sf::Keyboard::E) {
+		if (evalBar) {
+			evalBar->toggleVisibility();
+			std::cout << "Eval bar toggled" << std::endl;
+		}
+	}
+
+	// A key - toggle arrows
+	if (key.code == sf::Keyboard::A) {
+		if (arrowManager) {
+			arrowManager->toggleVisibility();
+			std::cout << "Arrows toggled" << std::endl;
+		}
+	}
 }
 
 
