@@ -199,7 +199,10 @@ void Game::renderText(sf::Color color,int yPosition){
 
 void Game::renderText(sf::Color color,int yPosition,std::string textToRender){
 
-	font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf");
+	// Try Windows font first, fall back to Linux path
+	if (!font.loadFromFile("C:/Windows/Fonts/arial.ttf")) {
+		font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf");
+	}
 
 	// select the font
 	text.setFont(font); // font is a sf::Font

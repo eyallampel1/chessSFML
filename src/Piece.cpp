@@ -31,10 +31,14 @@ void Piece::releasedCoardinate(std::string releasedCoordinate){
 
 void Piece::loadTexture(){
 
-	chessBoardTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_board.png");	
+	if (!chessBoardTexture.loadFromFile("src/assets/chess_board.png")) {
+		chessBoardTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_board.png");
+	}
 	chessBoardSprite.setTexture(chessBoardTexture);
 
-	chessPiecesTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_sprite.png");
+	if (!chessPiecesTexture.loadFromFile("src/assets/chess_sprite.png")) {
+		chessPiecesTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_sprite.png");
+	}
 
 	//total number of image in our sprite is 6 column 2 rows
 	imageCount.x=6;
