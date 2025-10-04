@@ -1,4 +1,5 @@
 # Build artifacts
+build/
 build/bin/*.exe
 build/bin/*.dll
 build/bin/*.pdb
@@ -21,3 +22,10 @@ runner
 
 # Chess engines
 engines/*.exe
+
+# Large datasets / local data
+puzzel_lichess/
+
+# Misc local files
+gdbSession
+myVimSession.vim
