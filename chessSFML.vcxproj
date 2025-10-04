@@ -90,6 +90,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\Board.cpp" />
     <ClCompile Include="src\checkIfLegal.cpp" />
     <ClCompile Include="src\Coordinate.cpp" />
     <ClCompile Include="src\Game.cpp" />
@@ -98,6 +99,7 @@
     <ClCompile Include="src\Piece.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\Board.h" />
     <ClInclude Include="src\checkIfLegal.h" />
     <ClInclude Include="src\Coordinate.h" />
     <ClInclude Include="src\Game.h" />
