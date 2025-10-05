@@ -1,4 +1,4 @@
-#include "Game.h"
+﻿#include "Game.h"
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/RenderTarget.hpp>
 #include <SFML/Graphics/RenderWindow.hpp>
@@ -12,6 +12,8 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
+#include <ctime>
 #include <windows.h>
 #include <commdlg.h>
 #include <cctype>
@@ -33,6 +35,33 @@ Game::Game(){
 	// Initialize engine in background
 	initEngine();
 
+	// Seed RNG once for varied puzzle sampling
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    // Initialize user DB stored next to the executable for consistent loads
+    auto getExecutableDir = []() -> std::string {
+        char path[MAX_PATH] = {0};
+        DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
+        if (len == 0 || len == MAX_PATH) return std::string(".");
+        std::string p(path, path + len);
+        size_t pos = p.find_last_of("/\\");
+        if (pos != std::string::npos) return p.substr(0, pos);
+        return std::string(".");
+    };
+    std::string dbPath = getExecutableDir() + "\\userdb.db";
+    userDb = new UserDB(dbPath);
+    if (userDb->load()) {
+        std::cout << "UserDB loaded from: " << dbPath << " (" << (userDb->isSQLiteEnabled() ? "SQLite" : "Text") << ")" << std::endl;
+    } else {
+        std::cout << "UserDB load failed at: " << dbPath << std::endl;
+    }
+    if (puzzleFilePath.empty()) {
+        puzzleFilePath = userDb->getLastCsvPath();
+        if (!puzzleFilePath.empty()) {
+            std::cout << "Loaded CSV path from DB: " << puzzleFilePath << std::endl;
+        }
+    }
+
 	// Initialize UI buttons
 	initButtons();
 
@@ -45,6 +74,7 @@ Game::~Game(){
 	delete engine;
 	delete evalBar;
 	delete arrowManager;
+	if (userDb) { userDb->save(); delete userDb; userDb = nullptr; }
 
 	// Clean up buttons
 	for (auto btn : buttons) {
@@ -60,6 +90,9 @@ void Game::run(){
 		this->printMousePosition();  // MUST call this to update userWantedString!
 		this->updateDt();
 		this->processEvents();
+
+		// Update board (animations, etc.)
+		board->update(dt * 1000.0f);
 
 		// Update hovered square continuously while mouse is moved
 		board->updateHoveredSquare(userWantedString);
@@ -89,7 +122,7 @@ void Game::run(){
 							engine->stopAnalysis();
 							analysisRequested = false;
 							gameOver = true;
-							setStatusMessage("Checkmate — game over");
+							setStatusMessage("Checkmate - game over");
 						}
 					} else {
 						int evalForWhite = (turnForEval == PieceColor::BLACK) ? -top.score : top.score;
@@ -130,20 +163,20 @@ void Game::render(){
 		arrowManager->render();
 	}
 
-	// Update gameOver flag from board checkmate
-	if (board->getIsCheckmate()) {
-		if (!gameOver) {
-			// Stop analysis once when mate detected
-			if (engineInitialized) {
-				engine->stopAnalysis();
-				analysisRequested = false;
-			}
-			gameOver = true;
-		}
-	}
+    // Update gameOver flag from board checkmate (only in normal game mode)
+    if (!puzzleMode && board->getIsCheckmate()) {
+        if (!gameOver) {
+            // Stop analysis once when mate detected
+            if (engineInitialized) {
+                engine->stopAnalysis();
+                analysisRequested = false;
+            }
+            gameOver = true;
+        }
+    }
 
-    // Persistent checkmate banner over the board area
-    if (gameOver) {
+    // Persistent checkmate banner over the board area (not during puzzle mode)
+    if (!puzzleMode && gameOver) {
         renderCheckmateBanner();
     }
 
@@ -238,9 +271,10 @@ void Game::centerWindow(){
 
 
 void Game::initWindow(){
-	// Window size: 352 (board) + 40 (eval bar) + 200 (UI panel) = 592 width, 450 height for buttons
-	this->window=new sf::RenderWindow(sf::VideoMode(592, 450),
-			"Chess - Stockfish Analysis",sf::Style::Titlebar|sf::Style::Close);
+	// Window size: 352 (board) + 40 (eval bar) + 200 (UI panel) = 592 width
+	// Increase height to show more puzzle metadata below the board
+    this->window=new sf::RenderWindow(sf::VideoMode(592, 640),
+            "Made By Eyal Lampel", sf::Style::Titlebar|sf::Style::Close);
 	this->centerWindow();
 	this->window->setFramerateLimit(120);
 	this->window->setVerticalSyncEnabled(true);
@@ -261,6 +295,8 @@ void Game::processEvents(){
 		// Close window : exit
 		if (event.type == sf::Event::Closed)
 			this->window->close();
+
+		
 
 		// Keyboard events
 		if (event.type == sf::Event::KeyPressed)
@@ -286,8 +322,8 @@ void Game::processEvents(){
                         else if (i == 3) pt = PieceType::KNIGHT;
                         if (board->setLastMovePromotion(pt)) {
                             promotionOpen = false;
-                            // After promotion selection, run puzzle validation if active
-                            if (puzzleMode && puzzleIndex < puzzleMoves.size()) {
+                            // After promotion selection, run puzzle validation if active (disabled in analysis mode)
+                            if (puzzleMode && !puzzleAnalysisEnabled && puzzleIndex < puzzleMoves.size()) {
                                 std::string last = board->getLastMoveUCI();
                                 if (last == puzzleMoves[puzzleIndex]) {
                                     puzzleIndex++;
@@ -295,18 +331,19 @@ void Game::processEvents(){
                                     if (puzzleIndex >= puzzleMoves.size()) {
                                         puzzleSolved = true;
                                         puzzleSolvedClock.restart();
-                                        setStatusMessage("Puzzle solved! Great job");
+                                        setStatusMessage("Puzzle solved! Great job"); if (userDb) { userDb->adjustRating(15); if (!currentPuzzleId.empty()) userDb->removeFromReview(currentPuzzleId); userDb->save(); }
                                     } else {
                                         const std::string& reply = puzzleMoves[puzzleIndex];
+                                        // Slow reply, no initial wait
+                                        board->setNextProgrammaticAnimation(700.0f, 0.0f);
                                         if (board->applyUCIMove(reply)) {
                                             puzzleIndex++;
                                             std::string turn = (board->getCurrentTurn() == PieceColor::WHITE) ? "White" : "Black";
                                             setStatusMessage("Reply played. " + turn + " to move");
                                         }
                                     }
-                                } else {
-                                    setStatusMessage("Incorrect move");
-                                    board->undoLastMove();
+                                } else if (!puzzleAnalysisEnabled) {
+                                    setStatusMessage("Incorrect move"); if (userDb) { userDb->adjustRating(-15); if (!currentPuzzleId.empty()) userDb->pushReview(currentPuzzleId); userDb->save(); }                                    board->undoLastMove();
                                 }
                             }
                         }
@@ -378,8 +415,8 @@ void Game::processEvents(){
             			}
             		}
 
-            		// Puzzle validation: only if a new move was actually made and not waiting for promotion
-            		if (puzzleMode && !openedPromotion) {
+            		// Puzzle validation: only if a new move was actually made and not waiting for promotion (disabled in analysis mode)
+            		if (puzzleMode && !puzzleAnalysisEnabled && !openedPromotion) {
             			size_t postCount = board->getMoveCount();
             			if (postCount > prevCount && puzzleIndex < puzzleMoves.size()) {
              				std::string last = board->getLastMoveUCI();
@@ -390,11 +427,12 @@ void Game::processEvents(){
 								if (puzzleIndex >= puzzleMoves.size()) {
 									puzzleSolved = true;
 									puzzleSolvedClock.restart();
-									setStatusMessage("Puzzle solved! Great job");
+									setStatusMessage("Puzzle solved! Great job"); if (userDb) { userDb->adjustRating(15); if (!currentPuzzleId.empty()) userDb->removeFromReview(currentPuzzleId); userDb->save(); }
 								} else {
-									// Auto-play opponent reply if any
-									const std::string& reply = puzzleMoves[puzzleIndex];
-									if (board->applyUCIMove(reply)) {
+            // Auto-play opponent reply if any (slow, no wait)
+            const std::string& reply = puzzleMoves[puzzleIndex];
+            board->setNextProgrammaticAnimation(700.0f, 0.0f);
+            if (board->applyUCIMove(reply)) {
 										puzzleIndex++;
 										std::string turn = (board->getCurrentTurn() == PieceColor::WHITE) ? "White" : "Black";
 										setStatusMessage("Reply played. " + turn + " to move");
@@ -402,10 +440,11 @@ void Game::processEvents(){
 										setStatusMessage("Failed to play puzzle reply");
 									}
 								}
-							} else if (postCount > prevCount) {
+            						} else if (postCount > prevCount) {
 								// Legal move made but not matching puzzle
-								setStatusMessage("Incorrect move");
-								board->undoLastMove();
+								if (!puzzleAnalysisEnabled) {
+									setStatusMessage("Incorrect move"); if (userDb) { userDb->adjustRating(-15); if (!currentPuzzleId.empty()) userDb->pushReview(currentPuzzleId); userDb->save(); }                                    board->undoLastMove();
+								}
 							}
 						}
 					}
@@ -416,7 +455,7 @@ void Game::processEvents(){
 				// Trigger analysis update after move (non-blocking)
 				std::string currentFEN = board->getFEN();
 				if (currentFEN != lastAnalyzedFEN) {
-					if (!puzzleMode) updateAnalysis();
+					if (!puzzleMode || puzzleAnalysisEnabled) updateAnalysis();
 					lastAnalyzedFEN = currentFEN;
 				}
 			}
@@ -610,7 +649,7 @@ void Game::initEngine() {
 }
 
 void Game::updateAnalysis() {
-	if (!engineInitialized || gameOver || puzzleMode) return;
+	if (!engineInitialized || gameOver || (puzzleMode && !puzzleAnalysisEnabled)) return;
 
 	// Get current position from board
 	std::string fen = board->getFEN();
@@ -765,6 +804,10 @@ void Game::initButtons() {
     // Puzzle Mode button
     puzzleModeButton = new Button(window, &font, "Puzzle Mode", panelX + 10, 10 + (buttonHeight + spacing) * 4, buttonWidth, buttonHeight);
     puzzleModeButton->setOnClick([this]() {
+        // If memory path is empty but DB has a saved path, use it
+        if (puzzleFilePath.empty() && userDb && !userDb->getLastCsvPath().empty()) {
+            puzzleFilePath = userDb->getLastCsvPath();
+        }
         if (puzzleFilePath.empty()) {
             std::string path = openCSVFileDialog();
             if (path.empty()) { setStatusMessage("Puzzle load cancelled"); return; }
@@ -772,7 +815,7 @@ void Game::initButtons() {
                 setStatusMessage("Decompress .zst to .csv and select it");
                 return;
             }
-            puzzleFilePath = path;
+            puzzleFilePath = path; if (userDb) { userDb->setLastCsvPath(path); userDb->save(); }
         }
         puzzleMode = true;
         puzzleSolved = false;
@@ -781,11 +824,16 @@ void Game::initButtons() {
         gameOver = false;
         if (evalBar) evalBar->setEvaluation(0.0f);
         if (engineInitialized) {
+            // Default off in puzzle mode unless explicitly enabled
             engine->stopAnalysis();
             analysisRequested = false;
         }
         if (loadRandomPuzzle()) setStatusMessage("Puzzle loaded");
         else setStatusMessage("Failed to load puzzle");
+        // If puzzle analysis is enabled, kick off analysis now
+        if (puzzleAnalysisEnabled && engineInitialized) {
+            updateAnalysis();
+        }
     });
     buttons.push_back(puzzleModeButton);
 
@@ -797,8 +845,68 @@ void Game::initButtons() {
         puzzleSolved = false;
         if (loadRandomPuzzle()) setStatusMessage("Next puzzle loaded");
         else setStatusMessage("Failed to load puzzle");
+        if (puzzleAnalysisEnabled && engineInitialized) {
+            updateAnalysis();
+        }
     });
     buttons.push_back(nextPuzzleButton);
+
+    // Puzzle Analysis toggle button (default Off)
+    puzzleAnalysisButton = new Button(window, &font, "Analysis: Off", panelX + 10, 10 + (buttonHeight + spacing) * 6, buttonWidth, buttonHeight);
+    puzzleAnalysisButton->setOnClick([this]() {
+        puzzleAnalysisEnabled = !puzzleAnalysisEnabled;
+        puzzleAnalysisButton->setLabel(puzzleAnalysisEnabled ? std::string("Analysis: On") : std::string("Analysis: Off"));
+        if (puzzleMode) {
+            if (puzzleAnalysisEnabled) {
+                if (engineInitialized) updateAnalysis();
+            } else {
+                if (engineInitialized) {
+                    engine->stopAnalysis();
+                    analysisRequested = false;
+                }
+                arrowManager->clearArrows();
+                currentLines.clear();
+                if (evalBar) evalBar->setEvaluation(0.0f);
+            }
+        }
+    });
+    buttons.push_back(puzzleAnalysisButton);
+
+    // Back to Puzzle button: restore starting puzzle position (after applying first move)
+    backToPuzzleButton = new Button(window, &font, "Back To Puzzle", panelX + 10, 10 + (buttonHeight + spacing) * 7, buttonWidth, buttonHeight);
+    backToPuzzleButton->setOnClick([this]() {
+        if (!puzzleMode) { setStatusMessage("Enable Puzzle Mode first"); return; }
+        if (puzzleStartFEN.empty()) { setStatusMessage("No baseline puzzle state"); return; }
+        // Reset to FEN and reapply the first move if present
+        if (board->setFEN(puzzleStartFEN)) {
+            puzzleIndex = 0;
+            if (!puzzleFirstMove.empty()) {
+                board->setNextProgrammaticAnimation(300.0f, 0.0f);
+                if (board->applyUCIMove(puzzleFirstMove)) {
+                    puzzleIndex = 1;
+                }
+            }
+            puzzleSolved = false;
+            setStatusMessage("Returned to puzzle");
+            arrowManager->clearArrows();
+            currentLines.clear();
+            if (evalBar) evalBar->setEvaluation(0.0f);
+            if (puzzleAnalysisEnabled && engineInitialized) updateAnalysis();
+        }
+    });
+    buttons.push_back(backToPuzzleButton);
+
+    // Change CSV button
+    changeCsvButton = new Button(window, &font, "Change Puzzles CSV", panelX + 10, 10 + (buttonHeight + spacing) * 8, buttonWidth, buttonHeight);
+    changeCsvButton->setOnClick([this]() {
+        std::string path = openCSVFileDialog();
+        if (!path.empty()) {
+            puzzleFilePath = path;
+            if (userDb) { userDb->setLastCsvPath(path); userDb->save(); }
+            setStatusMessage("CSV updated");
+        }
+    });
+    buttons.push_back(changeCsvButton);
 }
 
 void Game::updateButtons() {
@@ -809,9 +917,9 @@ void Game::updateButtons() {
 }
 
 void Game::renderUI() {
-	// Draw UI panel background
+	// Draw UI panel background (full window height)
 	sf::RectangleShape panel;
-	panel.setSize(sf::Vector2f(200.0f, 450.0f));
+	panel.setSize(sf::Vector2f(200.0f, static_cast<float>(window->getSize().y)));
 	panel.setPosition(392.0f, 0.0f);
 	panel.setFillColor(sf::Color(30, 30, 30));
 	window->draw(panel);
@@ -821,79 +929,91 @@ void Game::renderUI() {
 		btn->render();
 	}
 
-	// Turn indicator (below the last button)
+	// Turn indicator (below the last button row)
 	{
+		const float buttonHeight = 35.0f;
+		const float spacing = 10.0f;
+		// Place below the last button row (we currently render 9 rows: 0..8)
+		const float baseY = 10.0f + (buttonHeight + spacing) * 9;
 		sf::Text turnText;
 		turnText.setFont(font);
 		turnText.setCharacterSize(16);
 		turnText.setFillColor(sf::Color(200, 200, 200));
 		std::string turn = (board->getCurrentTurn() == PieceColor::WHITE) ? "White to move" : "Black to move";
 		turnText.setString("Turn: " + turn);
-		// Place just below the last button (Next Puzzle ends at ~270)
-		turnText.setPosition(400.0f, 280.0f);
+		turnText.setPosition(400.0f, baseY);
 		window->draw(turnText);
-	}
 
-	// Render status message (fades after 3 seconds)
-	if (!statusMessage.empty() && statusClock.getElapsedTime().asSeconds() < 3.0f) {
-		sf::Text statusText;
-		statusText.setFont(font);
-		statusText.setString(statusMessage);
-		statusText.setCharacterSize(18);
-		statusText.setFillColor(sf::Color::Green);
-		// Place below turn indicator, above help text
-		statusText.setPosition(400.0f, 310.0f);
-		window->draw(statusText);
-	}
+		// Puzzle rating
+		if (userDb) {
+			sf::Text ratingText;
+			ratingText.setFont(font);
+			ratingText.setCharacterSize(16);
+			ratingText.setFillColor(sf::Color(200, 200, 200));
+			ratingText.setString("Puzzle Rating: " + std::to_string(userDb->getRating()));
+			ratingText.setPosition(400.0f, baseY + 20.0f);
+			window->draw(ratingText);
+		}
 
-	// Keyboard shortcuts help text
-	// Place help/tooltips below the status area to avoid overlap
-	float helpY = 335.0f;
-	sf::Text helpText;
-	helpText.setFont(font);
-	helpText.setCharacterSize(14);
-	helpText.setFillColor(sf::Color(150, 150, 150));
+		// Render status message (fades after 3 seconds) just below turn indicator
+		if (!statusMessage.empty() && statusClock.getElapsedTime().asSeconds() < 3.0f) {
+			sf::Text statusText;
+			statusText.setFont(font);
+			statusText.setString(statusMessage);
+			statusText.setCharacterSize(18);
+			statusText.setFillColor(sf::Color::Green);
+			statusText.setPosition(400.0f, baseY + 30.0f);
+			window->draw(statusText);
+		}
 
-	helpText.setString("Keyboard Shortcuts:");
-	helpText.setPosition(400.0f, helpY);
-	window->draw(helpText);
+		// Keyboard shortcuts help text below status
+		float helpY = baseY + 55.0f;
+		sf::Text helpText;
+		helpText.setFont(font);
+		helpText.setCharacterSize(14);
+		helpText.setFillColor(sf::Color(150, 150, 150));
 
-	// E key - Eval bar toggle
-	helpY += 25.0f;
-	helpText.setCharacterSize(12);
-	std::string evalStatus = evalBar && evalBar->getVisible() ? "ON" : "OFF";
-	sf::Color evalColor = evalBar && evalBar->getVisible() ? sf::Color::Green : sf::Color::Red;
-	helpText.setString("E - Eval Bar");
-	helpText.setFillColor(sf::Color(180, 180, 180));
-	helpText.setPosition(400.0f, helpY);
-	window->draw(helpText);
+		helpText.setString("Keyboard Shortcuts:");
+		helpText.setPosition(400.0f, helpY);
+		window->draw(helpText);
 
-	sf::Text evalIndicator;
-	evalIndicator.setFont(font);
-	evalIndicator.setCharacterSize(12);
-	evalIndicator.setString(evalStatus);
-	evalIndicator.setFillColor(evalColor);
-	evalIndicator.setStyle(sf::Text::Bold);
-	evalIndicator.setPosition(520.0f, helpY);
-	window->draw(evalIndicator);
+		// E key - Eval bar toggle
+		helpY += 25.0f;
+		helpText.setCharacterSize(12);
+		std::string evalStatus = evalBar && evalBar->getVisible() ? "ON" : "OFF";
+		sf::Color evalColor = evalBar && evalBar->getVisible() ? sf::Color::Green : sf::Color::Red;
+		helpText.setString("E - Eval Bar");
+		helpText.setFillColor(sf::Color(180, 180, 180));
+		helpText.setPosition(400.0f, helpY);
+		window->draw(helpText);
 
-	// A key - Arrows toggle
-	helpY += 20.0f;
-	std::string arrowStatus = arrowManager && arrowManager->getVisible() ? "ON" : "OFF";
-	sf::Color arrowColor = arrowManager && arrowManager->getVisible() ? sf::Color::Green : sf::Color::Red;
-	helpText.setString("A - Arrows");
-	helpText.setFillColor(sf::Color(180, 180, 180));
-	helpText.setPosition(400.0f, helpY);
-	window->draw(helpText);
+		sf::Text evalIndicator;
+		evalIndicator.setFont(font);
+		evalIndicator.setCharacterSize(12);
+		evalIndicator.setString(evalStatus);
+		evalIndicator.setFillColor(evalColor);
+		evalIndicator.setStyle(sf::Text::Bold);
+		evalIndicator.setPosition(520.0f, helpY);
+		window->draw(evalIndicator);
 
-	sf::Text arrowIndicator;
-	arrowIndicator.setFont(font);
-	arrowIndicator.setCharacterSize(12);
-	arrowIndicator.setString(arrowStatus);
-	arrowIndicator.setFillColor(arrowColor);
-	arrowIndicator.setStyle(sf::Text::Bold);
-	arrowIndicator.setPosition(520.0f, helpY);
+		// A key - Arrows toggle
+		helpY += 20.0f;
+		std::string arrowStatus = arrowManager && arrowManager->getVisible() ? "ON" : "OFF";
+		sf::Color arrowColor = arrowManager && arrowManager->getVisible() ? sf::Color::Green : sf::Color::Red;
+		helpText.setString("A - Arrows");
+		helpText.setFillColor(sf::Color(180, 180, 180));
+		helpText.setPosition(400.0f, helpY);
+		window->draw(helpText);
+
+		sf::Text arrowIndicator;
+		arrowIndicator.setFont(font);
+		arrowIndicator.setCharacterSize(12);
+		arrowIndicator.setString(arrowStatus);
+		arrowIndicator.setFillColor(arrowColor);
+		arrowIndicator.setStyle(sf::Text::Bold);
+		arrowIndicator.setPosition(520.0f, helpY);
 		window->draw(arrowIndicator);
+	}
 }
 
 void Game::setStatusMessage(const std::string& message) {
@@ -945,40 +1065,65 @@ bool Game::loadRandomPuzzle() {
     f.seekg(0, std::ios::end);
     std::streamoff fileSize = f.tellg();
     if (fileSize <= 0) { f.close(); return false; }
-
-    // Try up to a few attempts to sample a valid line quickly
+    // Working variable for selected CSV line
     std::string chosen;
-    for (int attempt = 0; attempt < 5 && chosen.empty(); ++attempt) {
-        // Random offset
+
+        // If there is a pending review puzzle, serve it first
+    if (userDb && !userDb->getReviewQueue().empty()) {
+        // helper to lowercase strings
+        auto toLower = [](std::string s){ for (auto& c : s) c = (char)tolower((unsigned char)c); return s; };
+        std::string reviewId = userDb->getReviewQueue().front();
+        // Scan file to find exact line by PuzzleId
+        std::ifstream rf(puzzleFilePath);
+        if (rf.is_open()) {
+            std::string header; std::getline(rf, header);
+            std::string line;
+            while (std::getline(rf, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                auto fields2 = csvSplitLine(line);
+                int idIdx = -1; // find PuzzleId column index (cached below)
+                for (size_t i = 0; i < puzzleHeaders.size(); ++i) { if (toLower(puzzleHeaders[i]) == "puzzleid") { idIdx = (int)i; break; } }
+                if (idIdx >= 0 && (size_t)idIdx < fields2.size() && fields2[idIdx] == reviewId) {
+                    chosen = line;
+                    // Pop served review item
+                    if (userDb) { std::string tmp; userDb->popReview(tmp); userDb->save(); }
+                    break;
+                }
+            }
+            rf.close();
+        }
+        if (chosen.empty()) {
+            // If not found, pop it from review to avoid infinite loop
+            std::string tmp; if (userDb->popReview(tmp)) userDb->save();
+        }
+    }
+
+    // Use rating window around current rating if not chosen via review queue
+    int targetRating = userDb ? userDb->getRating() : 1500;
+    int window = 100;
+    for (int attempt = 0; attempt < 200 && chosen.empty(); ++attempt) {
         std::streamoff offset = static_cast<std::streamoff>(rand()) % fileSize;
         f.seekg(offset, std::ios::beg);
-
-        // If not at start, skip to next newline to align to line boundary
-        if (offset > 0) {
-            std::string dummy;
-            std::getline(f, dummy);
-        }
-
-        // Read the next non-header, non-empty line; if EOF, wrap to start
+        if (offset > 0) { std::string dummy; std::getline(f, dummy); }
         std::string line;
-        if (!std::getline(f, line)) {
-            f.clear();
-            f.seekg(0, std::ios::beg);
-            // Skip header
-            std::getline(f, line);
+        if (!std::getline(f, line)) { f.clear(); f.seekg(0, std::ios::beg); std::getline(f, line); }
+        if (line.rfind("PuzzleId,", 0) == 0) { if (!std::getline(f, line)) { f.clear(); f.seekg(0, std::ios::beg); std::getline(f, line); std::getline(f, line); } }
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        auto fieldsTry = csvSplitLine(line);
+        int idIdx = -1, ratingIdx = -1;
+        for (size_t i = 0; i < puzzleHeaders.size(); ++i) {
+            std::string low = puzzleHeaders[i]; for (auto& c : low) c = (char)tolower((unsigned char)c);
+            if (low == "puzzleid") idIdx = (int)i;
+            else if (low == "rating") ratingIdx = (int)i;
         }
-
-        // If we landed on header, try the next line
-        if (line.rfind("PuzzleId,", 0) == 0) {
-            if (!std::getline(f, line)) {
-                f.clear(); f.seekg(0, std::ios::beg);
-                std::getline(f, line); // skip header again
-                std::getline(f, line);
+        if (ratingIdx >= 0 && (size_t)ratingIdx < fieldsTry.size()) {
+            int r = 0; try { r = std::stoi(fieldsTry[ratingIdx]); } catch (...) { r = targetRating; }
+            if (r >= targetRating - window && r <= targetRating + window) {
+                chosen = line;
+                break;
             }
         }
-        // Trim trailing CR if present (Windows newlines)
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (!line.empty()) chosen = line;
     }
 
     f.close();
@@ -1005,12 +1150,16 @@ bool Game::loadRandomPuzzle() {
     };
     int fenIdx = findIndex("FEN");
     int movesIdx = findIndex("Moves");
+    int idIdx = findIndex("PuzzleId");
     if (fenIdx < 0) fenIdx = 1; // fallback
     if (movesIdx < 0) movesIdx = 2; // fallback
 
     std::string fen = (fenIdx >= 0 && (size_t)fenIdx < fields.size()) ? fields[fenIdx] : std::string();
     std::string moves = (movesIdx >= 0 && (size_t)movesIdx < fields.size()) ? fields[movesIdx] : std::string();
+    if (idIdx >= 0 && (size_t)idIdx < fields.size()) currentPuzzleId = fields[idIdx];
     if (!board->setFEN(fen)) return false;
+    // Save baseline puzzle position and first move to allow returning after side-lines
+    puzzleStartFEN = fen;
     puzzleMoves = splitUciMoves(moves);
     puzzleIndex = 0;
     lastAnalyzedFEN = board->getFEN();
@@ -1019,6 +1168,8 @@ bool Game::loadRandomPuzzle() {
     // then let the user solve from the other side.
     if (!puzzleMoves.empty()) {
         const std::string& first = puzzleMoves[0];
+        puzzleFirstMove = first;
+        board->setNextProgrammaticAnimation(1500.0f, 2000.0f);
         if (board->applyUCIMove(first)) {
             puzzleIndex = 1; // next expected move is user's response
             std::string turn = (board->getCurrentTurn() == PieceColor::WHITE) ? "White" : "Black";
@@ -1031,93 +1182,142 @@ bool Game::loadRandomPuzzle() {
 }
 
 void Game::renderAnalysisPanel() {
-    // In puzzle mode, repurpose this area to show puzzle metadata
+    // In puzzle mode, show metadata; optionally overlay analysis at the top when enabled
     if (puzzleMode) {
         renderPuzzleMetadataPanel();
+        if (!engineInitialized || currentLines.empty() || !puzzleAnalysisEnabled) return;
+
+        // Draw an opaque overlay at the top of the metadata area for the 3 best lines
+        const float overlayHeight = 98.0f;
+        sf::RectangleShape overlay;
+        overlay.setSize(sf::Vector2f(352.0f, overlayHeight));
+        overlay.setPosition(0.0f, 352.0f);
+        overlay.setFillColor(sf::Color(20, 20, 20, 240));
+        window->draw(overlay);
+
+        PieceColor currentTurn = board->getCurrentTurn();
+        float yOffset = 360.0f;
+        for (size_t i = 0; i < currentLines.size() && i < 3; i++) {
+            const EngineLine& line = currentLines[i];
+
+            sf::CircleShape indicator(8.0f);
+            indicator.setPosition(8.0f, yOffset + 4.0f);
+            if (i == 0) indicator.setFillColor(sf::Color(0, 200, 0));
+            else if (i == 1) indicator.setFillColor(sf::Color(200, 200, 0));
+            else indicator.setFillColor(sf::Color(255, 165, 0));
+            window->draw(indicator);
+
+            sf::Text evalText;
+            evalText.setFont(font);
+            evalText.setCharacterSize(14);
+            evalText.setFillColor(sf::Color::White);
+
+            int displayScore = line.score;
+            if (currentTurn == PieceColor::BLACK) displayScore = -displayScore;
+            std::ostringstream evalStr;
+            if (line.mate != 0) {
+                int moves = (std::abs(line.mate) + 1) / 2;
+                bool currentMating = (currentTurn == PieceColor::WHITE) ? (line.mate > 0) : (line.mate < 0);
+                evalStr << (currentMating ? "M" : "M-") << moves;
+            } else {
+                float pawns = displayScore / 100.0f;
+                evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pawns;
+            }
+            evalText.setString(evalStr.str());
+            evalText.setPosition(25.0f, yOffset);
+            window->draw(evalText);
+
+            sf::Text movesText;
+            movesText.setFont(font);
+            movesText.setCharacterSize(13);
+            movesText.setFillColor(sf::Color(180, 180, 180));
+            std::ostringstream movesStr;
+            for (size_t j = 0; j < line.pv.size() && j < 5; j++) {
+                std::string move = line.pv[j];
+                if (move.length() >= 4) {
+                    std::string from = move.substr(0, 2);
+                    std::string to = move.substr(2, 2);
+                    from[0] = toupper(from[0]);
+                    to[0] = toupper(to[0]);
+                    movesStr << from << to;
+                    if (j < line.pv.size() - 1 && j < 4) movesStr << " ";
+                }
+            }
+            movesText.setString(movesStr.str());
+            movesText.setPosition(80.0f, yOffset);
+            window->draw(movesText);
+
+            yOffset += 30.0f;
+        }
         return;
     }
+
     if (!engineInitialized || currentLines.empty()) return;
 
-	// Analysis panel background - below the board
-	sf::RectangleShape panel;
-	panel.setSize(sf::Vector2f(352.0f, 98.0f));  // Board width, space below board
-	panel.setPosition(0.0f, 352.0f);
-	panel.setFillColor(sf::Color(20, 20, 20));
-	window->draw(panel);
+    // Analysis panel background - below the board (normal mode)
+    sf::RectangleShape panel;
+    panel.setSize(sf::Vector2f(352.0f, 98.0f));
+    panel.setPosition(0.0f, 352.0f);
+    panel.setFillColor(sf::Color(20, 20, 20));
+    window->draw(panel);
 
-	// Get current turn - we'll show evaluation from their perspective
-	PieceColor currentTurn = board->getCurrentTurn();
+    // Get current turn - we'll show evaluation from their perspective
+    PieceColor currentTurn = board->getCurrentTurn();
 
-	// Render each line
-	float yOffset = 360.0f;
-	for (size_t i = 0; i < currentLines.size() && i < 3; i++) {
-		const EngineLine& line = currentLines[i];
+    // Render each line
+    float yOffset = 360.0f;
+    for (size_t i = 0; i < currentLines.size() && i < 3; i++) {
+        const EngineLine& line = currentLines[i];
 
-		// Line number indicator
-		sf::CircleShape indicator(8.0f);
-		indicator.setPosition(8.0f, yOffset + 4.0f);
-		if (i == 0) indicator.setFillColor(sf::Color(0, 200, 0));      // Green
-		else if (i == 1) indicator.setFillColor(sf::Color(200, 200, 0)); // Yellow
-		else indicator.setFillColor(sf::Color(255, 165, 0));            // Orange
-		window->draw(indicator);
+        sf::CircleShape indicator(8.0f);
+        indicator.setPosition(8.0f, yOffset + 4.0f);
+        if (i == 0) indicator.setFillColor(sf::Color(0, 200, 0));
+        else if (i == 1) indicator.setFillColor(sf::Color(200, 200, 0));
+        else indicator.setFillColor(sf::Color(255, 165, 0));
+        window->draw(indicator);
 
-		// Evaluation text
-		sf::Text evalText;
-		evalText.setFont(font);
-		evalText.setCharacterSize(14);
-		evalText.setFillColor(sf::Color::White);
+        sf::Text evalText;
+        evalText.setFont(font);
+        evalText.setCharacterSize(14);
+        evalText.setFillColor(sf::Color::White);
 
-		// Show from current player's perspective
-		// Stockfish gives White's perspective, so flip if it's Black's turn
-		int displayScore = line.score;
-		if (currentTurn == PieceColor::BLACK) {
-			displayScore = -displayScore;
-		}
+        int displayScore = line.score;
+        if (currentTurn == PieceColor::BLACK) displayScore = -displayScore;
+        std::ostringstream evalStr;
+        if (line.mate != 0) {
+            int moves = (std::abs(line.mate) + 1) / 2;
+            bool currentMating = (currentTurn == PieceColor::WHITE) ? (line.mate > 0) : (line.mate < 0);
+            evalStr << (currentMating ? "M" : "M-") << moves;
+        } else {
+            float pawns = displayScore / 100.0f;
+            evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pawns;
+        }
+        evalText.setString(evalStr.str());
+        evalText.setPosition(25.0f, yOffset);
+        window->draw(evalText);
 
-		std::ostringstream evalStr;
-		// Prefer mate display if available
-		if (line.mate != 0) {
-			int moves = (std::abs(line.mate) + 1) / 2; // convert plies to moves
-			bool currentMating = (currentTurn == PieceColor::WHITE) ? (line.mate > 0) : (line.mate < 0);
-			if (currentMating) {
-				evalStr << "M" << moves;
-			} else {
-				evalStr << "M-" << moves;
-			}
-		} else {
-			float pawns = displayScore / 100.0f;
-			evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pawns;
-		}
+        sf::Text movesText;
+        movesText.setFont(font);
+        movesText.setCharacterSize(13);
+        movesText.setFillColor(sf::Color(180, 180, 180));
+        std::ostringstream movesStr;
+        for (size_t j = 0; j < line.pv.size() && j < 5; j++) {
+            std::string move = line.pv[j];
+            if (move.length() >= 4) {
+                std::string from = move.substr(0, 2);
+                std::string to = move.substr(2, 2);
+                from[0] = toupper(from[0]);
+                to[0] = toupper(to[0]);
+                movesStr << from << to;
+                if (j < line.pv.size() - 1 && j < 4) movesStr << " ";
+            }
+        }
+        movesText.setString(movesStr.str());
+        movesText.setPosition(80.0f, yOffset);
+        window->draw(movesText);
 
-		evalText.setString(evalStr.str());
-		evalText.setPosition(25.0f, yOffset);
-		window->draw(evalText);
-
-		// Move sequence (first 5 moves)
-		sf::Text movesText;
-		movesText.setFont(font);
-		movesText.setCharacterSize(13);
-		movesText.setFillColor(sf::Color(180, 180, 180));
-
-		std::ostringstream movesStr;
-		for (size_t j = 0; j < line.pv.size() && j < 5; j++) {
-			std::string move = line.pv[j];
-			// Convert UCI to readable (just show the move)
-			if (move.length() >= 4) {
-				std::string from = move.substr(0, 2);
-				std::string to = move.substr(2, 2);
-				from[0] = toupper(from[0]);
-				to[0] = toupper(to[0]);
-				movesStr << from << to;
-				if (j < line.pv.size() - 1 && j < 4) movesStr << " ";
-			}
-		}
-		movesText.setString(movesStr.str());
-		movesText.setPosition(80.0f, yOffset);
-		window->draw(movesText);
-
-		yOffset += 30.0f;
-	}
+        yOffset += 30.0f;
+    }
 }
 
 std::string Game::openFileDialog() {
@@ -1145,7 +1345,7 @@ std::string Game::openFileDialog() {
 void Game::renderPuzzleMetadataPanel() {
     // Panel below the board (same area as analysis panel)
     sf::RectangleShape panel;
-    panel.setSize(sf::Vector2f(352.0f, 98.0f));
+    panel.setSize(sf::Vector2f(352.0f, std::max(0.0f, static_cast<float>(window->getSize().y) - 352.0f)));
     panel.setPosition(0.0f, 352.0f);
     panel.setFillColor(sf::Color(20, 20, 20));
     window->draw(panel);
@@ -1156,12 +1356,12 @@ void Game::renderPuzzleMetadataPanel() {
     title.setString("Puzzle Info");
     title.setCharacterSize(14);
     title.setFillColor(sf::Color(255, 255, 255));
-    title.setPosition(8.0f, 356.0f);
+    title.setPosition(8.0f, 352.0f + 4.0f);
     window->draw(title);
 
     // List all metadata as key: value, wrapping columns if needed
     float x = 8.0f;
-    float y = 374.0f;
+    float y = 352.0f + 22.0f;
     float maxWidth = 336.0f; // panel width - padding
     float lineHeight = 16.0f;
 
@@ -1180,7 +1380,7 @@ void Game::renderPuzzleMetadataPanel() {
             // naive trim: shrink until fits
             while (!lineAccum.empty() && kv.getLocalBounds().width > maxWidth) {
                 lineAccum.pop_back();
-                kv.setString(lineAccum + "…");
+                kv.setString(lineAccum + "...");
             }
         }
         kv.setString(lineAccum);
@@ -1194,7 +1394,7 @@ void Game::renderPuzzleMetadataPanel() {
         const auto& kvp = puzzleMetaKVs[i];
         std::string entry = kvp.first + ": " + kvp.second;
         // Truncate very long values (like Themes) to keep within panel
-        if (entry.size() > 120) entry = entry.substr(0, 117) + "…";
+        if (entry.size() > 120) entry = entry.substr(0, 117) + "...";
 
         if (lineAccum.empty()) lineAccum = entry;
         else lineAccum += "    |    " + entry;
@@ -1216,7 +1416,7 @@ void Game::renderPuzzleMetadataPanel() {
             }
         }
         // Stop if panel vertical space exhausted
-        if (y + lineHeight > 446.0f) break;
+        if (y + lineHeight > (static_cast<float>(window->getSize().y) - 4.0f)) break;
     }
     flushLine();
 }
@@ -1257,8 +1457,17 @@ std::string Game::openCSVFileDialog() {
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
-    // Start in suggested puzzles directory if present
-    ofn.lpstrInitialDir = "puzzel_lichess";
+    // Start in last-used directory if available; otherwise suggested folder
+    static std::string initialDir;
+    initialDir.clear();
+    if (userDb && !userDb->getLastCsvPath().empty()) {
+        const std::string& last = userDb->getLastCsvPath();
+        size_t pos = last.find_last_of("/\\");
+        if (pos != std::string::npos) {
+            initialDir = last.substr(0, pos);
+        }
+    }
+    ofn.lpstrInitialDir = initialDir.empty() ? "puzzel_lichess" : initialDir.c_str();
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileNameA(&ofn) == TRUE) {
@@ -1266,6 +1475,19 @@ std::string Game::openCSVFileDialog() {
     }
     return "";
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

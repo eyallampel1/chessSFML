@@ -4,6 +4,7 @@
 #include "StockfishEngine.h"
 #include "EvalBar.h"
 #include "Arrow.h"
+#include "UserDB.h"
 #include "Button.h"
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Color.hpp>
@@ -42,6 +43,7 @@ class Game
 		StockfishEngine* engine;
 		EvalBar* evalBar;
 		ArrowManager* arrowManager;
+		UserDB* userDb;
 		bool engineInitialized;
 		bool analysisRequested;
 		std::string lastAnalyzedFEN;
@@ -55,13 +57,24 @@ class Game
         Button* newGameButton;
         Button* puzzleModeButton;
         Button* nextPuzzleButton;
+        Button* puzzleAnalysisButton;
+        Button* backToPuzzleButton;
+        Button* changeCsvButton;
 
 		// Status message
 		std::string statusMessage;
 		sf::Clock statusClock;
 
 		// Engine lines for display
-		std::vector<EngineLine> currentLines; 
+        std::vector<EngineLine> currentLines; 
+
+        // Puzzle analysis toggle (default off)
+        bool puzzleAnalysisEnabled = false;
+
+        // Puzzle baseline state for returning after side-lines
+        std::string puzzleStartFEN;
+        std::string puzzleFirstMove;
+        std::string currentPuzzleId;
 	public:
 
 		Game();

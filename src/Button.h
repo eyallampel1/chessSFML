@@ -39,6 +39,9 @@ public:
     void render();
 
     bool contains(const sf::Vector2i& point) const;
+
+    // Update button label at runtime and re-center the text
+    void setLabel(const std::string& newLabel);
 };
 
 #endif /* BUTTON_H */

@@ -115,9 +115,32 @@ private:
     std::string enPassantTarget = "-"; // target square in algebraic (e.g., "E3") or "-"
     bool hasAnyLegalMove(PieceColor color);
 
+    // Animation of last move
+    struct MoveAnimation {
+        bool active = false;
+        std::string from;
+        std::string to;
+        PieceType type = PieceType::NONE;
+        PieceColor color = PieceColor::NONE;
+        float elapsed = 0.0f;   // milliseconds
+        float duration = 0.0f;  // milliseconds
+        float delay = 0.0f;     // milliseconds to wait before moving
+    } moveAnim;
+
+    void updateAnimation(float dtMs);
+    void renderAnimationOverlay();
+
+    // One-shot override for next programmatic move animation
+    bool programmaticAnimOverride = false;
+    float programmaticAnimDurationMs = 0.0f;
+    float programmaticAnimDelayMs = 0.0f;
+
 public:
     Board(sf::RenderWindow* window);
     ~Board();
+
+    // Per-frame update (dt in milliseconds)
+    void update(float dtMs);
 
     void render();
     void reset();
@@ -147,6 +170,16 @@ public:
     // PGN export/import
     std::string getPGN() const;
     void loadPGN(const std::string& pgn);
+
+    // Trigger a visual animation of a move (does not change game state)
+    void triggerMoveAnimation(const std::string& from, const std::string& to, PieceType type, PieceColor color, float durationMs = 500.0f, float delayMs = 0.0f);
+
+    // Configure animation of the next programmatic move only
+    void setNextProgrammaticAnimation(float durationMs, float delayMs) {
+        programmaticAnimOverride = true;
+        programmaticAnimDurationMs = durationMs;
+        programmaticAnimDelayMs = delayMs;
+    }
 };
 
 #endif /* BOARD_H */

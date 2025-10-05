@@ -79,3 +79,18 @@ void Button::render() {
         window->draw(text);
     }
 }
+
+void Button::setLabel(const std::string& newLabel) {
+    label = newLabel;
+    if (font) {
+        text.setString(label);
+        // Re-center text within the background rect
+        sf::FloatRect textBounds = text.getLocalBounds();
+        sf::Vector2f pos = background.getPosition();
+        sf::Vector2f size = background.getSize();
+        text.setPosition(
+            pos.x + (size.x - textBounds.width) / 2.0f - textBounds.left,
+            pos.y + (size.y - textBounds.height) / 2.0f - textBounds.top
+        );
+    }
+}

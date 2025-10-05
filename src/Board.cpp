@@ -6,6 +6,8 @@
 #include <iostream>
 #include <cctype>
 #include <sstream>
+#include <cmath>
+#include <algorithm>
 
 Board::Board(sf::RenderWindow* window)
     : window(window), selectedPiece(nullptr), currentState(INITIAL), hoveredSquare(""), currentTurn(PieceColor::WHITE), isCheck(false),
@@ -46,6 +48,10 @@ void Board::reset() {
     moveHistory.clear();
 
     initializePieces();
+}
+
+void Board::update(float dtMs) {
+    updateAnimation(dtMs);
 }
 
 static PieceType pieceTypeFromChar(char c) {
@@ -175,6 +181,25 @@ bool Board::applyUCIMove(const std::string& uci) {
         else if (pc == 'n') pt = PieceType::KNIGHT;
         setLastMovePromotion(pt);
     }
+    // Trigger visual animation for programmatic (engine/puzzle) moves
+    if (ok) {
+        PieceType movedType = PieceType::NONE;
+        PieceColor movedColor = PieceColor::NONE;
+        if (!moveHistory.empty()) {
+            const auto& r = moveHistory.back();
+            movedType = r.movedPiece;
+            movedColor = r.movedColor;
+        }
+        // Use one-shot override if set; otherwise default to a moderate slow animation
+        float duration = 700.0f;
+        float delay = 0.0f;
+        if (programmaticAnimOverride) {
+            duration = programmaticAnimDurationMs;
+            delay = programmaticAnimDelayMs;
+            programmaticAnimOverride = false;
+        }
+        triggerMoveAnimation(from, to, movedType, movedColor, duration, delay);
+    }
     return ok;
 }
 
@@ -264,6 +289,22 @@ void Board::initializePieces() {
 
 void Board::render() {
     renderBoard();
+    // Highlight last move squares (like chess.com orange)
+    if (!moveHistory.empty()) {
+        const auto& r = moveHistory.back();
+        const sf::Color lastMoveColor = sf::Color(255, 140, 0, 110); // orange with alpha
+        auto drawSquare = [&](const std::string& sq){
+            int x = spriteCoordinate.getX(sq);
+            int y = spriteCoordinate.getY(sq);
+            sf::RectangleShape hl(sf::Vector2f(44, 44));
+            hl.setPosition(static_cast<float>(x), static_cast<float>(y));
+            hl.setFillColor(lastMoveColor);
+            hl.setOutlineThickness(0);
+            window->draw(hl);
+        };
+        if (r.from.size() == 2) drawSquare(r.from);
+        if (r.to.size() == 2) drawSquare(r.to);
+    }
     renderPieces();
 
     // Render hover highlight when dragging a piece
@@ -279,6 +320,8 @@ void Board::render() {
         highlight.setOutlineThickness(3);
         window->draw(highlight);
     }
+    // Render moving piece overlay on top
+    renderAnimationOverlay();
 }
 
 void Board::renderBoard() {
@@ -297,6 +340,11 @@ void Board::renderPieces() {
             sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
             x = mousePos.x - 22;
             y = mousePos.y - 22;
+        }
+
+        // If animating a move that already updated board state, hide the moved piece at destination
+        if (moveAnim.active && piece.position == moveAnim.to && piece.type == moveAnim.type && piece.color == moveAnim.color) {
+            continue;
         }
 
         renderPiece(piece, x, y);
@@ -680,6 +728,8 @@ void Board::handleRelease(const std::string& square) {
             }
 
             std::cout << "It's now " << (currentTurn == PieceColor::WHITE ? "white" : "black") << "'s turn" << std::endl;
+            // Trigger a short visual animation for manual moves
+            triggerMoveAnimation(record.from, record.to, record.movedPiece, record.movedColor, 300.0f);
         } else {
             std::cout << "Illegal move from " << clickedSquare << " to " << square << std::endl;
         }
@@ -814,6 +864,84 @@ std::string Board::getFEN() const {
     fen += " 1";
 
     return fen;
+}
+
+void Board::triggerMoveAnimation(const std::string& from, const std::string& to, PieceType type, PieceColor color, float durationMs, float delayMs) {
+    moveAnim.active = true;
+    moveAnim.from = from;
+    moveAnim.to = to;
+    moveAnim.type = type;
+    moveAnim.color = color;
+    moveAnim.elapsed = 0.0f;
+    moveAnim.duration = (durationMs < 0.0f) ? 0.0f : durationMs;
+    moveAnim.delay = (delayMs < 0.0f) ? 0.0f : delayMs;
+}
+
+static float easeOutCubic(float t) {
+    float p = 1.0f - t;
+    return 1.0f - p * p * p;
+}
+
+void Board::updateAnimation(float dtMs) {
+    if (!moveAnim.active) return;
+    moveAnim.elapsed += dtMs;
+    float total = moveAnim.delay + moveAnim.duration;
+    if (moveAnim.elapsed >= total) {
+        moveAnim.active = false;
+    }
+}
+
+void Board::renderAnimationOverlay() {
+    if (!moveAnim.active) return;
+
+    int sx = spriteCoordinate.getX(moveAnim.from);
+    int sy = spriteCoordinate.getY(moveAnim.from);
+    int ex = spriteCoordinate.getX(moveAnim.to);
+    int ey = spriteCoordinate.getY(moveAnim.to);
+
+    float t;
+    if (moveAnim.elapsed < moveAnim.delay) {
+        t = 0.0f; // still at start during delay
+    } else {
+        float animElapsed = moveAnim.elapsed - moveAnim.delay;
+        float denom = (moveAnim.duration <= 0.0f) ? 1.0f : moveAnim.duration;
+        float ratio = animElapsed / denom;
+        if (ratio > 1.0f) ratio = 1.0f;
+        if (ratio < 0.0f) ratio = 0.0f;
+        t = ratio;
+    }
+    float te = easeOutCubic(t);
+    float cx = sx + (ex - sx) * te;
+    float cy = sy + (ey - sy) * te;
+
+    const sf::Texture* texture = nullptr;
+    if (moveAnim.color == PieceColor::WHITE) {
+        switch (moveAnim.type) {
+            case PieceType::PAWN: texture = &whitePawnTexture; break;
+            case PieceType::KNIGHT: texture = &whiteKnightTexture; break;
+            case PieceType::BISHOP: texture = &whiteBishopTexture; break;
+            case PieceType::ROOK: texture = &whiteRookTexture; break;
+            case PieceType::QUEEN: texture = &whiteQueenTexture; break;
+            case PieceType::KING: texture = &whiteKingTexture; break;
+            default: break;
+        }
+    } else if (moveAnim.color == PieceColor::BLACK) {
+        switch (moveAnim.type) {
+            case PieceType::PAWN: texture = &blackPawnTexture; break;
+            case PieceType::KNIGHT: texture = &blackKnightTexture; break;
+            case PieceType::BISHOP: texture = &blackBishopTexture; break;
+            case PieceType::ROOK: texture = &blackRookTexture; break;
+            case PieceType::QUEEN: texture = &blackQueenTexture; break;
+            case PieceType::KING: texture = &blackKingTexture; break;
+            default: break;
+        }
+    }
+
+    if (texture) {
+        pieceSprite.setTexture(*texture);
+        pieceSprite.setPosition(cx, cy);
+        window->draw(pieceSprite);
+    }
 }
 
 std::string Board::findKing(PieceColor color) {
