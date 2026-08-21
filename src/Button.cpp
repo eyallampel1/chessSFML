@@ -99,6 +99,14 @@ void Button::setEnabled(bool value) {
     }
 }
 
+void Button::setBounds(float x, float y, float width, float height) {
+    background.setPosition(x, y);
+    background.setSize(sf::Vector2f(width, height));
+    border.setPosition(x, y);
+    border.setSize(sf::Vector2f(width, height));
+    setLabel(label);   // re-centres the text in the new rectangle
+}
+
 void Button::setLabel(const std::string& newLabel) {
     label = newLabel;
     if (font) {

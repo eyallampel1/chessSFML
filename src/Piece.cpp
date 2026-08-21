@@ -1,4 +1,5 @@
 #include "Piece.h"
+#include "AppPaths.h"
 #include "Coordinate.h"
 #include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/Graphics/Sprite.hpp>
@@ -31,13 +32,13 @@ void Piece::releasedCoardinate(std::string releasedCoordinate){
 
 void Piece::loadTexture(){
 
-	if (!chessBoardTexture.loadFromFile("src/assets/chess_board.png")) {
-		chessBoardTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_board.png");
+	if (!chessBoardTexture.loadFromFile(apppaths::resource("src/assets/chess_board.png"))) {
+		std::cout << "Warning: could not load the board texture" << std::endl;
 	}
 	chessBoardSprite.setTexture(chessBoardTexture);
 
-	if (!chessPiecesTexture.loadFromFile("src/assets/chess_sprite.png")) {
-		chessPiecesTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_sprite.png");
+	if (!chessPiecesTexture.loadFromFile(apppaths::resource("src/assets/chess_sprite.png"))) {
+		std::cout << "Warning: could not load the piece sprite sheet" << std::endl;
 	}
 
 	//total number of image in our sprite is 6 column 2 rows

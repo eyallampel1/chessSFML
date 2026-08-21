@@ -655,4 +655,260 @@ void HeadlessPosition::updateCastlingRightsForCapture(int targetIndex) {
     if (rank == 7 && file == 7) blackCastleK = false;
 }
 
+bool HeadlessPosition::setFEN(const std::string& fen) {
+    std::istringstream iss(fen);
+    std::string placement, sideField, castlingField, epField;
+    if (!(iss >> placement >> sideField >> castlingField >> epField)) return false;
+
+    std::array<Piece, 64> parsed;
+    parsed.fill(Piece{});
+
+    int file = 0;
+    int rank = 7;
+    for (char c : placement) {
+        if (c == '/') {
+            if (file != 8) return false;
+            file = 0;
+            --rank;
+            if (rank < 0) return false;
+            continue;
+        }
+        if (c >= '1' && c <= '8') {
+            file += c - '0';
+            if (file > 8) return false;
+            continue;
+        }
+        if (file > 7 || rank < 0) return false;
+
+        const bool white = std::isupper(static_cast<unsigned char>(c)) != 0;
+        const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        const PieceType type = (upper == 'P') ? PieceType::Pawn : pieceTypeFromChar(upper);
+        if (type == PieceType::None) return false;
+
+        parsed[static_cast<std::size_t>(index(file, rank))] =
+            Piece{type, white ? PieceColor::White : PieceColor::Black};
+        ++file;
+    }
+    if (file != 8 || rank != 0) return false;
+    if (sideField != "w" && sideField != "b") return false;
+
+    int ep = -1;
+    if (epField != "-") {
+        if (epField.size() < 2) return false;
+        const int epFile = epField[0] - 'a';
+        const int epRank = epField[1] - '1';
+        if (!inBounds(epFile, epRank)) return false;
+        ep = index(epFile, epRank);
+    }
+
+    // The clocks are optional; a FEN without them is still perfectly usable.
+    int half = 0;
+    int full = 1;
+    if (!(iss >> half)) half = 0;
+    if (!(iss >> full)) full = 1;
+    if (full < 1) full = 1;
+
+    board = parsed;
+    side = (sideField == "w") ? PieceColor::White : PieceColor::Black;
+    whiteCastleK = castlingField.find('K') != std::string::npos;
+    whiteCastleQ = castlingField.find('Q') != std::string::npos;
+    blackCastleK = castlingField.find('k') != std::string::npos;
+    blackCastleQ = castlingField.find('q') != std::string::npos;
+    enPassant = ep;
+    halfmove = half;
+    fullmove = full;
+    return true;
+}
+
+bool HeadlessPosition::isInCheck(PieceColor color) const {
+    const int kingSquare = findKingSquare(color);
+    if (kingSquare < 0) return false;
+    return isSquareAttacked(fileOf(kingSquare), rankOf(kingSquare), opposite(color));
+}
+
+std::vector<Move> HeadlessPosition::legalMoves() const {
+    std::vector<Move> moves;
+    const PieceColor mover = side;
+
+    for (int from = 0; from < 64; ++from) {
+        const Piece& piece = at(from);
+        if (isEmptyPiece(piece) || piece.color != mover) continue;
+
+        const int fromFile = fileOf(from);
+        const int fromRank = rankOf(from);
+
+        for (int to = 0; to < 64; ++to) {
+            if (to == from) continue;
+            const int toFile = fileOf(to);
+            const int toRank = rankOf(to);
+
+            const Piece& target = at(to);
+            const bool targetOccupied = !isEmptyPiece(target);
+            if (targetOccupied && target.color == mover) continue;
+
+            const bool enPassantCapture =
+                (piece.type == PieceType::Pawn && !targetOccupied && enPassant == to);
+            const bool capture = targetOccupied || enPassantCapture;
+
+            const bool promoting = (piece.type == PieceType::Pawn) &&
+                ((mover == PieceColor::White && toRank == 7) ||
+                 (mover == PieceColor::Black && toRank == 0));
+
+            static const PieceType kPromotions[4] = {
+                PieceType::Queen, PieceType::Rook, PieceType::Bishop, PieceType::Knight
+            };
+            const int variants = promoting ? 4 : 1;
+
+            for (int v = 0; v < variants; ++v) {
+                const PieceType promotion = promoting ? kPromotions[v] : PieceType::None;
+                if (!canPieceReach(piece.type, mover, fromFile, fromRank, toFile, toRank,
+                                   capture, promoting, promotion)) {
+                    continue;
+                }
+
+                Move candidate;
+                candidate.from = from;
+                candidate.to = to;
+                candidate.moving = piece.type;
+                candidate.promotion = promotion;
+                candidate.isCapture = capture;
+                candidate.isEnPassant = enPassantCapture;
+                if (wouldLeaveKingInCheck(candidate)) continue;
+                moves.push_back(candidate);
+            }
+        }
+    }
+
+    // Castling has rules of its own - rights, empty squares, not passing
+    // through check - which resolveCastling already applies.
+    Move castle;
+    if (resolveCastling("O-O", castle)) moves.push_back(castle);
+    if (resolveCastling("O-O-O", castle)) moves.push_back(castle);
+
+    return moves;
+}
+
+bool HeadlessPosition::decodeUci(const std::string& uci, Move& move) const {
+    if (uci.size() < 4) return false;
+    const int fromFile = uci[0] - 'a';
+    const int fromRank = uci[1] - '1';
+    const int toFile = uci[2] - 'a';
+    const int toRank = uci[3] - '1';
+    if (!inBounds(fromFile, fromRank) || !inBounds(toFile, toRank)) return false;
+
+    PieceType promotion = PieceType::None;
+    if (uci.size() >= 5) {
+        switch (std::tolower(static_cast<unsigned char>(uci[4]))) {
+            case 'q': promotion = PieceType::Queen; break;
+            case 'r': promotion = PieceType::Rook; break;
+            case 'b': promotion = PieceType::Bishop; break;
+            case 'n': promotion = PieceType::Knight; break;
+            default: return false;
+        }
+    }
+
+    const int from = index(fromFile, fromRank);
+    const int to = index(toFile, toRank);
+    for (const Move& candidate : legalMoves()) {
+        if (candidate.from != from || candidate.to != to) continue;
+        // A promoting move written without a suffix means a queen.
+        const PieceType wanted =
+            (promotion == PieceType::None && candidate.promotion != PieceType::None)
+                ? PieceType::Queen : promotion;
+        if (candidate.promotion != wanted) continue;
+        move = candidate;
+        return true;
+    }
+    return false;
+}
+
+std::string HeadlessPosition::toSan(const Move& move) const {
+    std::string san;
+
+    if (move.isCastleKingSide) {
+        san = "O-O";
+    } else if (move.isCastleQueenSide) {
+        san = "O-O-O";
+    } else {
+        const int fromFile = fileOf(move.from);
+        const int fromRank = rankOf(move.from);
+
+        if (move.moving == PieceType::Pawn) {
+            // A pawn capture is named by the file the pawn left: "exd5".
+            if (move.isCapture) {
+                san.push_back(fileChar(fromFile));
+                san.push_back('x');
+            }
+        } else {
+            san.push_back(charFromPiece(move.moving, PieceColor::White));
+
+            // Disambiguate only against pieces that could legally do the same
+            // thing: file if that is enough, else rank, else both.
+            bool needFile = false;
+            bool needRank = false;
+            bool ambiguous = false;
+            for (const Move& other : legalMoves()) {
+                if (other.to != move.to || other.from == move.from) continue;
+                if (other.moving != move.moving) continue;
+                ambiguous = true;
+                if (fileOf(other.from) == fromFile) needRank = true;
+                if (rankOf(other.from) == fromRank) needFile = true;
+            }
+            if (ambiguous) {
+                if (!needFile && !needRank) needFile = true;
+                if (needFile) san.push_back(fileChar(fromFile));
+                if (needRank) san.push_back(rankChar(fromRank));
+            }
+
+            if (move.isCapture) san.push_back('x');
+        }
+
+        san.push_back(fileChar(fileOf(move.to)));
+        san.push_back(rankChar(rankOf(move.to)));
+
+        if (move.promotion != PieceType::None) {
+            san.push_back('=');
+            san.push_back(charFromPiece(move.promotion, PieceColor::White));
+        }
+    }
+
+    // Telling check from mate needs the resulting position.
+    HeadlessPosition after = *this;
+    if (after.applyMove(move)) {
+        if (after.isInCheck(after.sideToMove())) {
+            san.push_back(after.legalMoves().empty() ? '#' : '+');
+        }
+    }
+    return san;
+}
+
+std::string formatPvSan(const std::string& startFen,
+                        const std::vector<std::string>& uciMoves,
+                        std::size_t maxPlies) {
+    HeadlessPosition position;
+    if (!position.setFEN(startFen)) return {};
+
+    std::ostringstream out;
+    bool wroteAny = false;
+    for (std::size_t i = 0; i < uciMoves.size() && i < maxPlies; ++i) {
+        Move move;
+        if (!position.decodeUci(uciMoves[i], move)) break;
+
+        const bool whiteToMove = (position.sideToMove() == PieceColor::White);
+        const std::string san = position.toSan(move);
+
+        if (wroteAny) out << ' ';
+        if (whiteToMove) {
+            out << position.fullmoveNumber() << '.';
+        } else if (!wroteAny) {
+            out << position.fullmoveNumber() << "...";
+        }
+        out << san;
+        wroteAny = true;
+
+        position.applyMove(move);
+    }
+    return out.str();
+}
+
 } // namespace analysis

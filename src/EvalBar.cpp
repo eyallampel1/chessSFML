@@ -31,6 +31,22 @@ EvalBar::EvalBar(sf::RenderWindow* window, sf::Font* font, int x, int y, int wid
     }
 }
 
+void EvalBar::setGeometry(int x, int y, int width, int height) {
+    if (posX == x && posY == y && barWidth == width && barHeight == height) return;
+
+    posX = x;
+    posY = y;
+    barWidth = width;
+    barHeight = height;
+
+    background.setSize(sf::Vector2f(static_cast<float>(barWidth), static_cast<float>(barHeight)));
+    background.setPosition(static_cast<float>(posX), static_cast<float>(posY));
+
+    // Re-run the fill maths for the new size; whichever mode is active.
+    if (mateMode) setMateEvaluation(matePliesStored, mateWhiteWinning);
+    else setEvaluation(evaluation);
+}
+
 float EvalBar::clampEval(float eval) const {
     // Clamp between -1000 and +1000 centipawns (10 pawns advantage)
     return std::max(-1000.0f, std::min(1000.0f, eval));

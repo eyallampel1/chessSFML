@@ -47,6 +47,10 @@ public:
 
     // Update button label at runtime and re-center the text
     void setLabel(const std::string& newLabel);
+
+    // Move and resize at runtime; course mode lays its panel out from the
+    // board size, which depends on the screen.
+    void setBounds(float x, float y, float width, float height);
 };
 
 #endif /* BUTTON_H */

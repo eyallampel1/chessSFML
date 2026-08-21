@@ -6,6 +6,7 @@
 #include "Arrow.h"
 #include "UserDB.h"
 #include "Button.h"
+#include "CourseTrainer.h"
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/Font.hpp>
@@ -64,6 +65,24 @@ class Game
         Button* backToPuzzleButton;
         Button* changeCsvButton;
         Button* analyzePgnButton;
+        Button* courseButton;
+
+        // Opening-course trainer (Hakobyan 1.d4). Owns its own panel, buttons
+        // and board navigation; the Game just forwards events to it.
+        CourseTrainer* course = nullptr;
+        sf::Vector2u normalWindowSize;
+
+        // Course mode draws the board larger. Rather than rescale every
+        // hard-coded 44-pixel square, the board is drawn through its own view:
+        // board code keeps working in 0..352 and the view stretches it into
+        // whatever rectangle the window has room for. Mouse positions are
+        // mapped back through the same view.
+        sf::View uiView;      // 1:1 with the window, for panels
+        sf::View boardView;   // 0..352 stretched over the board rectangle
+        float boardScale = 1.0f;
+        void setCourseLayout(bool on);
+        void applyViews(unsigned int width, unsigned int height, float scale);
+        std::string openCourseFolderDialog();
 
         // Bulk PGN analysis state
         std::thread bulkAnalysisThread;
@@ -87,8 +106,11 @@ class Game
 		std::string statusMessage;
 		sf::Clock statusClock;
 
-		// Engine lines for display
-        std::vector<EngineLine> currentLines; 
+		// Engine lines for display, plus their rendered form. Turning a PV
+		// into SAN runs move generation, so it is done once when the engine
+		// reports rather than on every frame of the panel.
+        std::vector<EngineLine> currentLines;
+        std::vector<CourseTrainer::EngineReadout> currentLineText;
 
         // Puzzle analysis toggle (default off)
         bool puzzleAnalysisEnabled = false;

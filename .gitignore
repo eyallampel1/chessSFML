@@ -33,3 +33,6 @@ myVimSession.vim
 # Windows reserved names artifacts
 nul
 CON
+
+# Packaged distribution output
+dist/

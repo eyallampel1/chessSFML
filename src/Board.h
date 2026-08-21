@@ -4,6 +4,8 @@
 #include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/Graphics/Sprite.hpp>
 #include <SFML/Graphics/Texture.hpp>
+#include <SFML/Graphics/Font.hpp>
+#include <SFML/Graphics/Text.hpp>
 #include <SFML/System/Vector2.hpp>
 #include <SFML/Audio/SoundBuffer.hpp>
 #include <SFML/Audio/Sound.hpp>
@@ -41,9 +43,6 @@ struct ChessPiece {
 class Board {
 private:
     sf::RenderWindow* window;
-    sf::Texture chessBoardTexture;
-    sf::Sprite chessBoardSprite;
-
     // Individual piece textures
     sf::Texture whitePawnTexture, whiteKnightTexture, whiteBishopTexture;
     sf::Texture whiteRookTexture, whiteQueenTexture, whiteKingTexture;
@@ -51,6 +50,8 @@ private:
     sf::Texture blackRookTexture, blackQueenTexture, blackKingTexture;
 
     sf::Sprite pieceSprite;
+    sf::Font* uiFont = nullptr;   // for the rank/file labels; not owned
+    float renderScale = 1.0f;     // board pixels -> screen pixels
 
     std::vector<ChessPiece> pieces;
     Coordinate spriteCoordinate;
@@ -97,11 +98,18 @@ private:
     enum State { INITIAL, PIECE_CLICKED, PIECE_RELEASED };
     State currentState;
 
+    // One square, in the board's own coordinate space. Course mode enlarges
+    // the board with a view rather than by changing this.
+    static constexpr float SQUARE_SIZE = 44.0f;
+
     void loadTextures();
     void initializePieces();
     void renderBoard();
     void renderPieces();
     void renderPiece(const ChessPiece& piece, int x, int y);
+    void drawPieceSprite(const sf::Texture& texture, float x, float y);
+    void drawBoardText(const std::string& s, float x, float y,
+                       unsigned int size, const sf::Color& colour);
     ChessPiece* getPieceAt(const std::string& position);
     bool isMoveLegal(const ChessPiece& piece, const std::string& from, const std::string& to);
     bool isPathClear(const std::string& from, const std::string& to);
@@ -113,6 +121,13 @@ private:
     void executeCastle(PieceColor color, bool kingside);
     bool isEnPassantCapture(const ChessPiece& piece, const std::string& from, const std::string& to) const;
     std::string enPassantTarget = "-"; // target square in algebraic (e.g., "E3") or "-"
+
+    // Where the move counters stood when this position was set up, so getFEN()
+    // can report real ones. The engine needs the halfmove clock for the
+    // fifty-move rule, and notation needs the move number.
+    int baseFullmove = 1;
+    int baseHalfmove = 0;
+    PieceColor baseSideToMove = PieceColor::WHITE;
     bool hasAnyLegalMove(PieceColor color);
 
     // Animation of last move
@@ -138,6 +153,15 @@ private:
 public:
     Board(sf::RenderWindow* window);
     ~Board();
+
+    // Optional: supplying a font makes the board draw its own rank and file
+    // labels. Without one the squares are still drawn, just unlabelled.
+    void setFont(sf::Font* f) { uiFont = f; }
+
+    // How many screen pixels one board pixel occupies. Glyphs are rasterised
+    // once at a fixed size, so text drawn inside an enlarged board would be a
+    // magnified bitmap unless it is rasterised at the size it will appear.
+    void setRenderScale(float scale) { renderScale = (scale > 0.0f) ? scale : 1.0f; }
 
     // Per-frame update (dt in milliseconds)
     void update(float dtMs);

@@ -1,4 +1,5 @@
 #include "Board.h"
+#include "AppPaths.h"
 #include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/Graphics/RectangleShape.hpp>
 #include <SFML/Graphics/Color.hpp>
@@ -16,13 +17,13 @@ Board::Board(sf::RenderWindow* window)
     initializePieces();
 
     // Load sound effects
-    if (moveSoundBuffer.loadFromFile("src/assets/sounds/Move.ogg")) {
+    if (moveSoundBuffer.loadFromFile(apppaths::resource("src/assets/sounds/Move.ogg"))) {
         moveSound.setBuffer(moveSoundBuffer);
         moveSound.setVolume(50);  // 50% volume
     } else {
         std::cout << "Warning: Could not load move sound" << std::endl;
     }
-    if (captureSoundBuffer.loadFromFile("src/assets/sounds/Capture.ogg")) {
+    if (captureSoundBuffer.loadFromFile(apppaths::resource("src/assets/sounds/Capture.ogg"))) {
         captureSound.setBuffer(captureSoundBuffer);
         captureSound.setVolume(50);  // 50% volume
     } else {
@@ -46,6 +47,9 @@ void Board::reset() {
     checkmateFlag = false;
     stalemateFlag = false;
     moveHistory.clear();
+    baseFullmove = 1;
+    baseHalfmove = 0;
+    baseSideToMove = PieceColor::WHITE;
 
     initializePieces();
 }
@@ -115,6 +119,13 @@ bool Board::setFEN(const std::string& fen) {
 
     // Active color
     currentTurn = (active == "w") ? PieceColor::WHITE : PieceColor::BLACK;
+
+    // Move counters this position starts from
+    baseSideToMove = currentTurn;
+    try { baseHalfmove = std::stoi(half); } catch (...) { baseHalfmove = 0; }
+    try { baseFullmove = std::stoi(full); } catch (...) { baseFullmove = 1; }
+    if (baseHalfmove < 0) baseHalfmove = 0;
+    if (baseFullmove < 1) baseFullmove = 1;
 
     // Castling rights
     whiteKingsideCastle  = castling.find('K') != std::string::npos;
@@ -204,51 +215,32 @@ bool Board::applyUCIMove(const std::string& uci) {
 }
 
 void Board::loadTextures() {
-    // Load chess board
-    if (!chessBoardTexture.loadFromFile("src/assets/chess_board.png")) {
-        chessBoardTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/chess_board.png");
-    }
-    chessBoardSprite.setTexture(chessBoardTexture);
+    auto load = [](sf::Texture& texture, const char* relative) {
+        const std::string path = apppaths::resource(relative);
+        if (!texture.loadFromFile(path)) {
+            std::cout << "Warning: could not load " << path << std::endl;
+            return;
+        }
+        // The art is 44px per square; course mode draws the board at up to
+        // twice that, and unsmoothed upscaling looks like Lego.
+        texture.setSmooth(true);
+    };
 
-    // Load white pieces
-    if (!whitePawnTexture.loadFromFile("src/assets/white_pawn.png")) {
-        whitePawnTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/white_pawn.png");
-    }
-    if (!whiteKnightTexture.loadFromFile("src/assets/white_knight.png")) {
-        whiteKnightTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/white_knight.png");
-    }
-    if (!whiteBishopTexture.loadFromFile("src/assets/white_bishof.png")) {
-        whiteBishopTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/white_bishof.png");
-    }
-    if (!whiteRookTexture.loadFromFile("src/assets/white_rook.png")) {
-        whiteRookTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/white_rook.png");
-    }
-    if (!whiteQueenTexture.loadFromFile("src/assets/white_queen.png")) {
-        whiteQueenTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/white_queen.png");
-    }
-    if (!whiteKingTexture.loadFromFile("src/assets/white_king.png")) {
-        whiteKingTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/white_king.png");
-    }
+    // No board image any more - renderBoard() draws the squares and labels, so
+    // they stay sharp however large course mode makes the board.
+    load(whitePawnTexture,   "src/assets/white_pawn.png");
+    load(whiteKnightTexture, "src/assets/white_knight.png");
+    load(whiteBishopTexture, "src/assets/white_bishof.png");
+    load(whiteRookTexture,   "src/assets/white_rook.png");
+    load(whiteQueenTexture,  "src/assets/white_queen.png");
+    load(whiteKingTexture,   "src/assets/white_king.png");
 
-    // Load black pieces
-    if (!blackPawnTexture.loadFromFile("src/assets/black_pawn.png")) {
-        blackPawnTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/black_pawn.png");
-    }
-    if (!blackKnightTexture.loadFromFile("src/assets/black_knight.png")) {
-        blackKnightTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/black_knight.png");
-    }
-    if (!blackBishopTexture.loadFromFile("src/assets/black_bishop.png")) {
-        blackBishopTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/black_bishop.png");
-    }
-    if (!blackRookTexture.loadFromFile("src/assets/black_rook.png")) {
-        blackRookTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/black_rook.png");
-    }
-    if (!blackQueenTexture.loadFromFile("src/assets/black_queen.png")) {
-        blackQueenTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/black_queen.png");
-    }
-    if (!blackKingTexture.loadFromFile("src/assets/black_king.png")) {
-        blackKingTexture.loadFromFile("/home/kingl/c++Try/sfmlWithClass/src/assets/black_king.png");
-    }
+    load(blackPawnTexture,   "src/assets/black_pawn.png");
+    load(blackKnightTexture, "src/assets/black_knight.png");
+    load(blackBishopTexture, "src/assets/black_bishop.png");
+    load(blackRookTexture,   "src/assets/black_rook.png");
+    load(blackQueenTexture,  "src/assets/black_queen.png");
+    load(blackKingTexture,   "src/assets/black_king.png");
 }
 
 void Board::initializePieces() {
@@ -325,7 +317,56 @@ void Board::render() {
 }
 
 void Board::renderBoard() {
-    window->draw(chessBoardSprite);
+    // Drawn rather than blitted from a texture: course mode enlarges the board
+    // and a 354px image cannot survive that, while rectangles and text are
+    // sharp at any size. Colours match the artwork this replaced.
+    static const sf::Color kLight(240, 217, 181);
+    static const sf::Color kDark(181, 136, 99);
+
+    sf::RectangleShape square(sf::Vector2f(SQUARE_SIZE, SQUARE_SIZE));
+    for (int rank = 1; rank <= 8; ++rank) {
+        for (int file = 0; file < 8; ++file) {
+            const bool light = ((file + rank) % 2) == 0;   // a1 is dark
+            square.setPosition(file * SQUARE_SIZE, (8 - rank) * SQUARE_SIZE);
+            square.setFillColor(light ? kLight : kDark);
+            window->draw(square);
+        }
+    }
+
+    if (!uiFont) return;
+
+    // Rank numbers down the h-file, file letters along rank 1, each in the
+    // colour of the square it does not sit on.
+    for (int rank = 1; rank <= 8; ++rank) {
+        const bool light = ((7 + rank) % 2) == 0;
+        drawBoardText(std::to_string(rank),
+                      7 * SQUARE_SIZE + SQUARE_SIZE - 9.0f, (8 - rank) * SQUARE_SIZE + 2.0f,
+                      12, light ? kDark : kLight);
+    }
+    for (int file = 0; file < 8; ++file) {
+        const bool light = ((file + 1) % 2) == 0;
+        drawBoardText(std::string(1, static_cast<char>('a' + file)),
+                      file * SQUARE_SIZE + 3.0f, 7 * SQUARE_SIZE + SQUARE_SIZE - 17.0f,
+                      12, light ? kDark : kLight);
+    }
+}
+
+// Text inside the board has to be rasterised at the size it will actually
+// appear, or the view's magnification turns it into a blurry bitmap. Draw at
+// scale x the requested size, then shrink back into board coordinates.
+void Board::drawBoardText(const std::string& s, float x, float y,
+                          unsigned int size, const sf::Color& colour) {
+    if (!uiFont) return;
+
+    sf::Text text;
+    text.setFont(*uiFont);
+    text.setCharacterSize(static_cast<unsigned int>(size * renderScale + 0.5f));
+    text.setScale(1.0f / renderScale, 1.0f / renderScale);
+    text.setStyle(sf::Text::Bold);
+    text.setFillColor(colour);
+    text.setString(s);
+    text.setPosition(x, y);
+    window->draw(text);
 }
 
 void Board::renderPieces() {
@@ -335,11 +376,13 @@ void Board::renderPieces() {
         int x = spriteCoordinate.getX(piece.position);
         int y = spriteCoordinate.getY(piece.position);
 
-        // If this piece is being dragged, attach it to mouse
+        // If this piece is being dragged, attach it to mouse. The cursor is in
+        // window pixels while we draw in board coordinates, and course mode
+        // scales between the two - the active view knows the conversion.
         if (currentState == PIECE_CLICKED && selectedPiece == &piece) {
-            sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
-            x = mousePos.x - 22;
-            y = mousePos.y - 22;
+            const sf::Vector2f onBoard = window->mapPixelToCoords(sf::Mouse::getPosition(*window));
+            x = static_cast<int>(onBoard.x - SQUARE_SIZE / 2.0f);
+            y = static_cast<int>(onBoard.y - SQUARE_SIZE / 2.0f);
         }
 
         // If animating a move that already updated board state, hide the moved piece at destination
@@ -378,10 +421,21 @@ void Board::renderPiece(const ChessPiece& piece, int x, int y) {
     }
 
     if (texture) {
-        pieceSprite.setTexture(*texture);
-        pieceSprite.setPosition(x, y);
-        window->draw(pieceSprite);
+        drawPieceSprite(*texture, static_cast<float>(x), static_cast<float>(y));
     }
+}
+
+// The piece art is far larger than one square so it stays sharp when course
+// mode enlarges the board; scale it down to the square here.
+void Board::drawPieceSprite(const sf::Texture& texture, float x, float y) {
+    pieceSprite.setTexture(texture, true);   // true: adopt the new texture's size
+    const sf::Vector2u size = texture.getSize();
+    if (size.x > 0 && size.y > 0) {
+        pieceSprite.setScale(SQUARE_SIZE / static_cast<float>(size.x),
+                             SQUARE_SIZE / static_cast<float>(size.y));
+    }
+    pieceSprite.setPosition(x, y);
+    window->draw(pieceSprite);
 }
 
 ChessPiece* Board::getPieceAt(const std::string& position) {
@@ -571,6 +625,28 @@ void Board::handleRelease(const std::string& square) {
                 // Castling attempt
                 bool kingside = (square[0] > clickedSquare[0]);
                 if (canCastle(selectedPiece->color, kingside)) {
+                    // Record the castle like any other move, and do it before
+                    // the rights are cleared so undo can put them back. Without
+                    // this the move is invisible to getMoveCount(), undo, PGN
+                    // export and anything replaying UCI.
+                    MoveRecord record;
+                    record.from = clickedSquare;
+                    record.to = square;
+                    record.movedPiece = PieceType::KING;
+                    record.movedColor = selectedPiece->color;
+                    record.capturedPiece = nullptr;
+                    record.wasCastle = true;
+                    record.wasEnPassant = false;
+                    record.wasPromotion = false;
+                    record.promotionType = PieceType::NONE;
+                    record.wasCheck = isCheck;
+                    record.whiteKCastle = whiteKingsideCastle;
+                    record.whiteQCastle = whiteQueensideCastle;
+                    record.blackKCastle = blackKingsideCastle;
+                    record.blackQCastle = blackQueensideCastle;
+                    record.prevEnPassantTarget = enPassantTarget;
+                    moveHistory.push_back(record);
+
                     executeCastle(selectedPiece->color, kingside);
                     moveSound.play();
                     // En passant target invalidated after any legal move
@@ -650,26 +726,9 @@ void Board::handleRelease(const std::string& square) {
                 moveSound.play();
             }
 
-            // Update castling rights when king or rook moves
-            if (selectedPiece->type == PieceType::KING) {
-                if (selectedPiece->color == PieceColor::WHITE) {
-                    whiteKingsideCastle = false;
-                    whiteQueensideCastle = false;
-                } else {
-                    blackKingsideCastle = false;
-                    blackQueensideCastle = false;
-                }
-            } else if (selectedPiece->type == PieceType::ROOK) {
-                if (selectedPiece->color == PieceColor::WHITE) {
-                    if (clickedSquare == "H1") whiteKingsideCastle = false;
-                    if (clickedSquare == "A1") whiteQueensideCastle = false;
-                } else {
-                    if (clickedSquare == "H8") blackKingsideCastle = false;
-                    if (clickedSquare == "A8") blackQueensideCastle = false;
-                }
-            }
-
-            // Record move in history
+            // Record move in history. The castling rights are snapshotted
+            // here, before this move updates them, so that undo restores the
+            // rights the position actually had beforehand.
             MoveRecord record;
             record.from = clickedSquare;
             record.to = square;
@@ -687,6 +746,25 @@ void Board::handleRelease(const std::string& square) {
             record.blackQCastle = blackQueensideCastle;
             record.prevEnPassantTarget = enPassantTarget;
             moveHistory.push_back(record);
+
+            // Update castling rights when the king or a rook moves
+            if (selectedPiece->type == PieceType::KING) {
+                if (selectedPiece->color == PieceColor::WHITE) {
+                    whiteKingsideCastle = false;
+                    whiteQueensideCastle = false;
+                } else {
+                    blackKingsideCastle = false;
+                    blackQueensideCastle = false;
+                }
+            } else if (selectedPiece->type == PieceType::ROOK) {
+                if (selectedPiece->color == PieceColor::WHITE) {
+                    if (clickedSquare == "H1") whiteKingsideCastle = false;
+                    if (clickedSquare == "A1") whiteQueensideCastle = false;
+                } else {
+                    if (clickedSquare == "H8") blackKingsideCastle = false;
+                    if (clickedSquare == "A8") blackQueensideCastle = false;
+                }
+            }
 
             // Move the piece
             selectedPiece->position = square;
@@ -857,11 +935,23 @@ std::string Board::getFEN() const {
         fen += ep;
     }
 
-    // 5. Halfmove clock (not tracked yet, default to 0)
-    fen += " 0";
+    // 5. Halfmove clock: plies since the last capture or pawn move. Stockfish
+    //    needs it to see the fifty-move rule coming.
+    int halfmoveClock = baseHalfmove;
+    for (size_t i = moveHistory.size(); i-- > 0; ) {
+        const MoveRecord& rec = moveHistory[i];
+        if (rec.movedPiece == PieceType::PAWN || rec.capturedPiece != nullptr) {
+            halfmoveClock = static_cast<int>(moveHistory.size() - 1 - i);
+            break;
+        }
+        if (i == 0) halfmoveClock = baseHalfmove + static_cast<int>(moveHistory.size());
+    }
+    fen += ' ' + std::to_string(halfmoveClock);
 
-    // 6. Fullmove number (simplified, always 1 for now)
-    fen += " 1";
+    // 6. Fullmove number, counted on from wherever this position started.
+    const int pliesPlayed = static_cast<int>(moveHistory.size()) +
+                            (baseSideToMove == PieceColor::BLACK ? 1 : 0);
+    fen += ' ' + std::to_string(baseFullmove + pliesPlayed / 2);
 
     return fen;
 }
@@ -938,9 +1028,7 @@ void Board::renderAnimationOverlay() {
     }
 
     if (texture) {
-        pieceSprite.setTexture(*texture);
-        pieceSprite.setPosition(cx, cy);
-        window->draw(pieceSprite);
+        drawPieceSprite(*texture, cx, cy);
     }
 }
 
@@ -1118,6 +1206,21 @@ void Board::undoLastMove() {
     if (moved) {
         if (rec.wasPromotion) moved->type = PieceType::PAWN;
         moved->position = rec.from;
+    }
+
+    // A castle moved two pieces; the rook has to go back to its corner too.
+    if (rec.wasCastle) {
+        const bool kingside = (rec.to[0] == 'G');
+        const char rank = rec.to[1];
+        const std::string rookNow  = std::string(1, kingside ? 'F' : 'D') + rank;
+        const std::string rookHome = std::string(1, kingside ? 'H' : 'A') + rank;
+        for (auto& p : pieces) {
+            if (p.isActive && p.color == rec.movedColor &&
+                p.type == PieceType::ROOK && p.position == rookNow) {
+                p.position = rookHome;
+                break;
+            }
+        }
     }
 
     // Restore captured piece, including en passant square

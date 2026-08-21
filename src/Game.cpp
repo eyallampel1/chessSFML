@@ -1,4 +1,6 @@
 #include "Game.h"
+#include "AppPaths.h"
+#include "HeadlessPosition.h"
 #include "PgnAnalyzer.h"
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/RenderTarget.hpp>
@@ -23,6 +25,39 @@
 #include <atomic>
 #include <mutex>
 
+namespace {
+
+// Engine output as the panels want to show it: evaluation from White's point
+// of view, and the principal variation in the board's uppercase-file form.
+struct EngineText {
+	std::string eval;
+	std::string pv;
+};
+
+EngineText formatEngineLine(const EngineLine& line, PieceColor turn,
+                            const std::string& fen, std::size_t maxPly) {
+	EngineText out;
+
+	std::ostringstream evalStr;
+	if (line.mate != 0) {
+		const int moves = (std::abs(line.mate) + 1) / 2;
+		const bool currentMating = (turn == PieceColor::WHITE) ? (line.mate > 0) : (line.mate < 0);
+		evalStr << (currentMating ? "M" : "M-") << moves;
+	} else {
+		const int forWhite = (turn == PieceColor::BLACK) ? -line.score : line.score;
+		const float pawns = forWhite / 100.0f;
+		evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(2) << pawns;
+	}
+	out.eval = evalStr.str();
+
+	// Real notation - "12.Nf3 d6 13.d4 cxd4" - rather than raw UCI pairs.
+	out.pv = analysis::formatPvSan(fen, line.pv, maxPly);
+
+	return out;
+}
+
+} // namespace
+
 Game::Game(){
 	this->initWindow();
 	board = new Board(this->window);
@@ -44,16 +79,7 @@ Game::Game(){
 	std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
     // Initialize user DB stored next to the executable for consistent loads
-    auto getExecutableDir = []() -> std::string {
-        char path[MAX_PATH] = {0};
-        DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
-        if (len == 0 || len == MAX_PATH) return std::string(".");
-        std::string p(path, path + len);
-        size_t pos = p.find_last_of("/\\");
-        if (pos != std::string::npos) return p.substr(0, pos);
-        return std::string(".");
-    };
-    std::string dbPath = getExecutableDir() + "\\userdb.db";
+    std::string dbPath = apppaths::executableDir() + "\\userdb.db";
     userDb = new UserDB(dbPath);
     if (userDb->load()) {
         std::cout << "UserDB loaded from: " << dbPath << " (" << (userDb->isSQLiteEnabled() ? "SQLite" : "Text") << ")" << std::endl;
@@ -70,11 +96,19 @@ Game::Game(){
 	// Initialize UI buttons
 	initButtons();
 
+	// Opening-course trainer: shares the board, the DB and the button font,
+	// which initButtons() has just loaded.
+	normalWindowSize = window->getSize();
+	applyViews(normalWindowSize.x, normalWindowSize.y, 1.0f);
+	course = new CourseTrainer(window, &font, board, userDb);
+	course->setStatusSink([this](const std::string& m) { setStatusMessage(m); });
+
 	// Initialize status message
 	statusMessage = "";
 }
 
 Game::~Game(){
+	delete course;
 	delete board;
 	delete engine;
 	delete evalBar;
@@ -110,6 +144,40 @@ void Game::run(){
 		// Update buttons
 		updateButtons();
 
+		// Course mode drives its own board navigation and reply timing
+		if (course && course->isActive()) {
+			course->updateHover(sf::Mouse::getPosition(*window));
+			course->update(dt * 1000.0f);
+
+			// The trainer moves the pieces itself, so watch the position
+			// rather than trying to hook every navigation path.
+			if (course->engineEnabled()) {
+				const std::string fen = board->getFEN();
+				if (fen != lastAnalyzedFEN) {
+					updateAnalysis();
+					lastAnalyzedFEN = fen;
+				} else if (!analysisRequested &&
+				           analysisClock.getElapsedTime().asMilliseconds() > 700) {
+					// The position is being studied, not played, so keep
+					// re-reading the search instead of freezing at whatever
+					// depth the first poll happened to catch.
+					analysisRequested = true;
+					analysisClock.restart();
+				}
+			} else if (!currentLines.empty()) {
+				if (engineInitialized) {
+					engine->stopAnalysis();
+					analysisRequested = false;
+				}
+				currentLines.clear();
+				currentLineText.clear();
+				if (arrowManager) arrowManager->clearArrows();
+				if (evalBar) evalBar->setEvaluation(0.0f);
+				course->clearEngineLines();
+				lastAnalyzedFEN.clear();
+			}
+		}
+
 		// Check for analysis updates periodically (non-blocking)
 		if (engineInitialized && analysisRequested && analysisClock.getElapsedTime().asMilliseconds() > 500) {
 			// Get best lines without blocking
@@ -118,6 +186,16 @@ void Game::run(){
 			if (!lines.empty()) {
 				// Store lines for display
 				currentLines = lines;
+
+				{
+					const PieceColor turn = board->getCurrentTurn();
+					const std::string fen = board->getFEN();
+					currentLineText.clear();
+					for (size_t i = 0; i < lines.size() && i < 3; ++i) {
+						const EngineText t = formatEngineLine(lines[i], turn, fen, 5);
+						currentLineText.push_back({t.eval, t.pv});
+					}
+				}
 
 				// Update eval bar with mate distance if available (White POV)
 				{
@@ -154,6 +232,21 @@ void Game::run(){
 						}
 					}
 				}
+
+				// The course panel shows the same three ranked lines as the
+				// normal analysis panel, which the board area has no room for
+				// in that mode.
+				if (course && course->isActive() && course->engineEnabled()) {
+					const PieceColor turn = board->getCurrentTurn();
+					const std::string fen = board->getFEN();
+					std::vector<CourseTrainer::EngineReadout> readouts;
+					for (size_t i = 0; i < lines.size() && i < 3; ++i) {
+						// The course panel is wide enough for a longer line.
+						const EngineText t = formatEngineLine(lines[i], turn, fen, 8);
+						readouts.push_back({t.eval, t.pv});
+					}
+					course->setEngineLines(std::move(readouts), lines[0].depth);
+				}
 			}
 
 			analysisRequested = false;
@@ -166,11 +259,33 @@ void Game::run(){
 
 void Game::render(){
 	this->window->clear();
-	this->board->render();
 
-	// Render arrows (behind pieces)
-	if (arrowManager) {
+	const bool courseActive = (course && course->isActive());
+
+	// Board, arrows and course markings all draw in the board's own 0..352
+	// coordinates, so they go through the board view together and scale as one.
+	this->window->setView(boardView);
+	this->board->render();
+	if (arrowManager && (!courseActive || course->linesVisible())) {
 		arrowManager->render();
+	}
+	if (courseActive) course->renderBoardOverlay();
+	this->window->setView(uiView);
+
+	if (courseActive) {
+		// The trainer owns everything outside the board in this mode; the
+		// normal button column is hidden entirely (Exit Course brings it back)
+		// so nothing competes with the course controls.
+		if (course->evalVisible() && evalBar) evalBar->render();
+		course->render();
+		if (promotionOpen) {
+			// The dialog is drawn in board coordinates, so it scales too.
+			window->setView(boardView);
+			renderPromotionDialog();
+			window->setView(uiView);
+		}
+		this->window->display();
+		return;
 	}
 
     // Update gameOver flag from board checkmate (only in normal game mode)
@@ -289,10 +404,25 @@ void Game::initWindow(){
 	this->window->setFramerateLimit(120);
 	this->window->setVerticalSyncEnabled(true);
 
+	// Title-bar and alt-tab icon. The executable's own Explorer icon comes
+	// from the same artwork, compiled in as a resource by src/app.rc.
+	{
+		sf::Image icon;
+		if (icon.loadFromFile(apppaths::resource("src/assets/icon.png"))) {
+			this->window->setIcon(icon.getSize().x, icon.getSize().y, icon.getPixelsPtr());
+		}
+	}
+
 }
 
 void Game::printMousePosition(){
 	position = sf::Mouse::getPosition(*window);
+	if (boardScale != 1.0f) {
+		// Squares are worked out in unscaled board coordinates, so undo the
+		// board view before asking which square the cursor is over.
+		const sf::Vector2f onBoard = window->mapPixelToCoords(position, boardView);
+		position = sf::Vector2i(static_cast<int>(onBoard.x), static_cast<int>(onBoard.y));
+	}
 	// std::cout<<"mouse position x="<<position.x<<std::endl;  // Commented out to avoid spam
 	// std::cout<<"mouse position y="<<position.y<<std::endl;  // Commented out to avoid spam
 	convertMousePositionToCordinate();
@@ -311,27 +441,53 @@ void Game::processEvents(){
 		// Keyboard events
 		if (event.type == sf::Event::KeyPressed)
 		{
+			if (course && course->isActive() && course->handleKey(event.key.code)) {
+				if (!course->isActive()) setCourseLayout(false);
+				continue;
+			}
 			handleKeyboard(event.key);
+		}
+
+		if (event.type == sf::Event::MouseWheelScrolled && course && course->isActive()) {
+			if (course->handleMouseWheel(sf::Mouse::getPosition(*window),
+			                             event.mouseWheelScroll.delta)) {
+				continue;
+			}
 		}
 
         if(event.type == sf::Event::MouseButtonPressed)
         {
             sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
 
+            // The trainer gets first refusal on clicks while course mode is on
+            if (course && course->isActive() && !promotionOpen) {
+                if (event.mouseButton.button == sf::Mouse::Left && course->handleMousePress(mousePos)) {
+                    if (!course->isActive()) setCourseLayout(false);
+                    continue;
+                }
+                if (course->boardLocked()) continue;
+            }
+
             // If promotion dialog open, only handle promotion clicks
             if (promotionOpen && event.mouseButton.button == sf::Mouse::Left) {
+                // The dialog is laid out in board coordinates, so test there.
+                const sf::Vector2f onBoard = window->mapPixelToCoords(mousePos, boardView);
                 // Map click to one of the 4 options
                 float btnY = 158.0f;
                 for (int i = 0; i < 4; ++i) {
                     float btnX = 86.0f + i * 50.0f;
                     sf::FloatRect rect(btnX, btnY, 44.0f, 38.0f);
-                    if (rect.contains(static_cast<float>(mousePos.x), static_cast<float>(mousePos.y))) {
+                    if (rect.contains(onBoard.x, onBoard.y)) {
                         PieceType pt = PieceType::QUEEN;
                         if (i == 1) pt = PieceType::ROOK;
                         else if (i == 2) pt = PieceType::BISHOP;
                         else if (i == 3) pt = PieceType::KNIGHT;
                         if (board->setLastMovePromotion(pt)) {
                             promotionOpen = false;
+                            if (course && course->isActive()) {
+                                course->onUserMove();
+                                break;
+                            }
                             // After promotion selection, run puzzle validation if active (disabled in analysis mode)
                             if (puzzleMode && !puzzleAnalysisEnabled && puzzleIndex < puzzleMoves.size()) {
                                 std::string last = board->getLastMoveUCI();
@@ -393,6 +549,32 @@ void Game::processEvents(){
 		if(event.type == sf::Event::MouseButtonReleased)
 		{
 			// Only process left mouse button release
+			if (event.mouseButton.button == sf::Mouse::Left && course && course->isActive()) {
+				if (!course->boardLocked()) {
+					const size_t prevCount = board->getMoveCount();
+					board->handleRelease(userWantedString);
+					if (board->getMoveCount() > prevCount) {
+						// Wait for the piece choice before judging a promotion
+						std::string last = board->getLastMoveUCI();
+						bool awaitingPromotion = false;
+						if (last.size() >= 4) {
+							std::string to;
+							to.push_back(std::toupper(static_cast<unsigned char>(last[2])));
+							to.push_back(last[3]);
+							const int rank = last[3] - '0';
+							if (board->getPieceTypeAt(to) == PieceType::PAWN && (rank == 8 || rank == 1)) {
+								promotionOpen = true;
+								awaitingPromotion = true;
+							}
+						}
+						if (!awaitingPromotion) course->onUserMove();
+					}
+				}
+				remainWithThisColor = true;
+				printSecTextLine = false;
+				continue;
+			}
+
 			if (event.mouseButton.button == sf::Mouse::Left) {
 				// If puzzle is already solved, ignore further moves and prompt next
 				if (puzzleMode && puzzleSolved) {
@@ -490,11 +672,19 @@ void Game::renderPromotionDialog() {
     box.setOutlineThickness(2.0f);
     window->draw(box);
 
-    sf::Text title;
-    title.setFont(font);
-    title.setString("Promote to:");
-    title.setCharacterSize(18);
-    title.setFillColor(sf::Color::White);
+    // This dialog draws in board coordinates, which course mode magnifies, so
+    // glyphs are rasterised at their on-screen size and scaled back down.
+    auto boardText = [this](const std::string& s, unsigned int size) {
+        sf::Text t;
+        t.setFont(font);
+        t.setCharacterSize(static_cast<unsigned int>(size * boardScale + 0.5f));
+        t.setScale(1.0f / boardScale, 1.0f / boardScale);
+        t.setFillColor(sf::Color::White);
+        t.setString(s);
+        return t;
+    };
+
+    sf::Text title = boardText("Promote to:", 18);
     title.setPosition(86.0f, 128.0f);
     window->draw(title);
 
@@ -510,11 +700,7 @@ void Game::renderPromotionDialog() {
         btn.setOutlineThickness(1.0f);
         window->draw(btn);
 
-        sf::Text lbl;
-        lbl.setFont(font);
-        lbl.setCharacterSize(12);
-        lbl.setFillColor(sf::Color::White);
-        lbl.setString(labels[i]);
+        sf::Text lbl = boardText(labels[i], 12);
         sf::FloatRect lb = lbl.getLocalBounds();
         lbl.setOrigin(lb.left + lb.width / 2.0f, lb.top + lb.height / 2.0f);
         lbl.setPosition(btnX + 22.0f, btnY + 19.0f);
@@ -625,6 +811,7 @@ void Game::renderText(sf::Color color,int yPosition,std::string textToRender){
 	if (!font.loadFromFile("C:/Windows/Fonts/arial.ttf")) {
 		font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf");
 	}
+	if (board) board->setFont(&font);
 
 	// select the font
 	text.setFont(font); // font is a sf::Font
@@ -645,8 +832,9 @@ void Game::renderText(sf::Color color,int yPosition,std::string textToRender){
 void Game::initEngine() {
 	std::cout << "Initializing Stockfish engine..." << std::endl;
 
-	// Try to initialize engine (path relative to executable)
-	if (engine->initialize("engines/stockfish.exe")) {
+	// Try to initialize engine (resolved against the executable, so a shortcut
+	// or an installed copy finds it too)
+	if (engine->initialize(apppaths::resource("engines/stockfish.exe"))) {
 		engineInitialized = true;
 		std::cout << "Engine initialized successfully!" << std::endl;
 
@@ -660,6 +848,8 @@ void Game::initEngine() {
 
 void Game::updateAnalysis() {
 	if (!engineInitialized || gameOver || (puzzleMode && !puzzleAnalysisEnabled)) return;
+	// In course mode the engine only runs when the user asks for it.
+	if (course && course->isActive() && !course->engineEnabled()) return;
 
 	// Get current position from board
 	std::string fen = board->getFEN();
@@ -798,6 +988,7 @@ void Game::initButtons() {
         board->reset();
         arrowManager->clearArrows();
         currentLines.clear();
+				currentLineText.clear();
         gameOver = false;
         setStatusMessage("New game started");
 
@@ -831,6 +1022,7 @@ void Game::initButtons() {
         puzzleSolved = false;
         arrowManager->clearArrows();
         currentLines.clear();
+				currentLineText.clear();
         gameOver = false;
         if (evalBar) evalBar->setEvaluation(0.0f);
         if (engineInitialized) {
@@ -876,6 +1068,7 @@ void Game::initButtons() {
                 }
                 arrowManager->clearArrows();
                 currentLines.clear();
+				currentLineText.clear();
                 if (evalBar) evalBar->setEvaluation(0.0f);
             }
         }
@@ -900,6 +1093,7 @@ void Game::initButtons() {
             setStatusMessage("Returned to puzzle");
             arrowManager->clearArrows();
             currentLines.clear();
+				currentLineText.clear();
             if (evalBar) evalBar->setEvaluation(0.0f);
             if (puzzleAnalysisEnabled && engineInitialized) updateAnalysis();
         }
@@ -932,14 +1126,166 @@ void Game::initButtons() {
         startBulkAnalysis(path);
     });
     buttons.push_back(analyzePgnButton);
+
+    // Hakobyan full 1.d4 course
+    courseButton = new Button(window, &font, "Hakobyan 1.d4 Course", panelX + 10, 10 + (buttonHeight + spacing) * 10, buttonWidth, buttonHeight);
+    courseButton->setOnClick([this]() {
+        if (!course) return;
+        if (course->isActive()) {
+            course->leave();
+            setCourseLayout(false);
+            setStatusMessage("Left course mode");
+            return;
+        }
+        // Course mode takes the board over, so drop whatever else was running.
+        puzzleMode = false;
+        puzzleSolved = false;
+        gameOver = false;
+        currentLines.clear();
+				currentLineText.clear();
+        if (arrowManager) arrowManager->clearArrows();
+        if (evalBar) evalBar->setEvaluation(0.0f);
+        if (engineInitialized) {
+            engine->stopAnalysis();
+            analysisRequested = false;
+        }
+
+        setCourseLayout(true);
+        if (!course->enter([this]() { return openCourseFolderDialog(); })) {
+            setCourseLayout(false);
+        }
+    });
+    buttons.push_back(courseButton);
+}
+
+void Game::applyViews(unsigned int width, unsigned int height, float scale) {
+    boardScale = scale;
+    uiView = sf::View(sf::FloatRect(0.0f, 0.0f,
+                                    static_cast<float>(width), static_cast<float>(height)));
+
+    // The board keeps drawing itself in 0..352 coordinates; the viewport says
+    // which part of the window that square gets stretched over.
+    const float boardPx = CourseTrainer::BOARD_UNIT * scale;
+    boardView = sf::View(sf::FloatRect(0.0f, 0.0f,
+                                       CourseTrainer::BOARD_UNIT, CourseTrainer::BOARD_UNIT));
+    boardView.setViewport(sf::FloatRect(0.0f, 0.0f,
+                                        boardPx / static_cast<float>(width),
+                                        boardPx / static_cast<float>(height)));
+    window->setView(uiView);
+
+    // The board draws its own coordinate labels and needs the same figure to
+    // rasterise them sharply.
+    if (board) board->setRenderScale(scale);
+}
+
+void Game::setCourseLayout(bool on) {
+    CourseTrainer::Layout layout;   // defaults describe the normal 1:1 geometry
+    float scale = 1.0f;
+
+    if (on) {
+        // Pick the largest board that still leaves room for the panels on this
+        // screen: the right panel wants ~480px, the move tree under the board
+        // ~200px, and we stay clear of the taskbar.
+        const sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+        const float availW = desktop.width * 0.92f;
+        const float availH = desktop.height * 0.88f;
+
+        static const float kScales[] = { 2.0f, 1.75f, 1.5f, 1.25f, 1.0f };
+        float chosenW = 1100.0f;
+        float chosenH = 700.0f;
+        for (float candidate : kScales) {
+            const float boardPx = CourseTrainer::BOARD_UNIT * candidate;
+            const float w = boardPx + layout.evalBarW + 480.0f;
+            const float h = boardPx + 200.0f;
+            if (w <= availW && h <= availH) {
+                scale = candidate;
+                chosenW = w;
+                chosenH = h;
+                break;
+            }
+        }
+
+        layout.boardSize = CourseTrainer::BOARD_UNIT * scale;
+        layout.panelX = layout.boardSize + layout.evalBarW;
+        layout.windowW = chosenW;
+        layout.windowH = chosenH;
+        layout.panelW = chosenW - layout.panelX;
+        course->setLayout(layout);
+    }
+
+    const sf::Vector2u target = on
+        ? sf::Vector2u(static_cast<unsigned int>(layout.windowW),
+                       static_cast<unsigned int>(layout.windowH))
+        : normalWindowSize;
+
+    if (window->getSize() != target) {
+        window->setSize(target);
+        centerWindow();
+    }
+    applyViews(target.x, target.y, on ? scale : 1.0f);
+
+    // The eval bar sits beside the board, wherever that now ends.
+    if (evalBar) {
+        const int edge = static_cast<int>(on ? layout.boardSize : 352.0f);
+        evalBar->setGeometry(edge, 0, static_cast<int>(layout.evalBarW), edge);
+    }
+
+    if (!on) {
+        // Back to a normal game on a fresh board, so pick the engine back up.
+        gameOver = false;
+        currentLines.clear();
+				currentLineText.clear();
+        if (arrowManager) arrowManager->clearArrows();
+        if (evalBar) evalBar->setEvaluation(0.0f);
+        lastAnalyzedFEN.clear();
+        if (engineInitialized) {
+            updateAnalysis();
+            lastAnalyzedFEN = board->getFEN();
+        }
+    }
+}
+
+std::string Game::openCourseFolderDialog() {
+    // There is no plain folder picker in commdlg, so ask for any PGN inside
+    // the course folder and take its parent. This one uses the wide API on
+    // purpose: chapter names such as "Grunfeld" are spelt with a u-umlaut and
+    // would not survive a round trip through the ANSI code page.
+    OPENFILENAMEW ofn;
+    wchar_t file[MAX_PATH] = { 0 };
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = window->getSystemHandle();
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = L"PGN Files (*.pgn)\0*.pgn\0All Files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrTitle = L"Pick any chapter PGN inside the course folder";
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    static std::wstring initialDir;
+    initialDir.clear();
+    if (userDb) {
+        const std::string saved = userDb->getSetting("course_dir");
+        if (!saved.empty()) initialDir = std::filesystem::u8path(saved).wstring();
+    }
+    ofn.lpstrInitialDir = initialDir.empty() ? NULL : initialDir.c_str();
+
+    if (GetOpenFileNameW(&ofn) == TRUE) {
+        return std::filesystem::path(std::wstring(ofn.lpstrFile)).u8string();
+    }
+    return "";
 }
 
 void Game::updateButtons() {
 	sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
-	if (analyzePgnButton) {
-		analyzePgnButton->setEnabled(!bulkAnalysisActive.load());
-	}
+	// The whole column is hidden in course mode, so there is nothing to update
+	// until Exit Course brings it back.
+	if (course && course->isActive()) return;
+
+	const bool bulkRunning = bulkAnalysisActive.load();
 	for (auto btn : buttons) {
+		btn->setEnabled(btn != analyzePgnButton || !bulkRunning);
 		btn->update(mousePos);
 	}
 }
@@ -961,7 +1307,7 @@ void Game::renderUI() {
 	{
 		const float buttonHeight = 35.0f;
 		const float spacing = 10.0f;
-		const float baseY = 10.0f + (buttonHeight + spacing) * 10;
+		const float baseY = 10.0f + (buttonHeight + spacing) * 11;
 		sf::Text turnText;
 		turnText.setFont(font);
 		turnText.setCharacterSize(16);
@@ -1043,8 +1389,6 @@ void Game::renderUI() {
 	}
 
 {
-	const float buttonHeight = 35.0f;
-	const float spacing = 10.0f;
 	BulkProgress progressSnapshot;
 	std::string messageCopy;
 	bool active = bulkAnalysisActive.load();
@@ -1062,7 +1406,9 @@ void Game::renderUI() {
 	}
 	if (active || !messageCopy.empty()) {
 		const float progressX = 392.0f + 10.0f;
-		const float progressY = 10.0f + (buttonHeight + spacing) * 10 + 40.0f;
+		// Pinned to the bottom of the panel: the button column now reaches
+		// far enough down that a fixed offset would land on the help text.
+		const float progressY = static_cast<float>(window->getSize().y) - 46.0f;
 		const float barWidth = 180.0f;
 		const float barHeight = 14.0f;
 
@@ -1294,11 +1640,8 @@ void Game::renderAnalysisPanel() {
         overlay.setFillColor(sf::Color(20, 20, 20, 240));
         window->draw(overlay);
 
-        PieceColor currentTurn = board->getCurrentTurn();
         float yOffset = 360.0f;
-        for (size_t i = 0; i < currentLines.size() && i < 3; i++) {
-            const EngineLine& line = currentLines[i];
-
+        for (size_t i = 0; i < currentLineText.size() && i < 3; i++) {
             sf::CircleShape indicator(8.0f);
             indicator.setPosition(8.0f, yOffset + 4.0f);
             if (i == 0) indicator.setFillColor(sf::Color(0, 200, 0));
@@ -1311,18 +1654,8 @@ void Game::renderAnalysisPanel() {
             evalText.setCharacterSize(14);
             evalText.setFillColor(sf::Color::White);
 
-            int displayScore = line.score;
-            if (currentTurn == PieceColor::BLACK) displayScore = -displayScore;
-            std::ostringstream evalStr;
-            if (line.mate != 0) {
-                int moves = (std::abs(line.mate) + 1) / 2;
-                bool currentMating = (currentTurn == PieceColor::WHITE) ? (line.mate > 0) : (line.mate < 0);
-                evalStr << (currentMating ? "M" : "M-") << moves;
-            } else {
-                float pawns = displayScore / 100.0f;
-                evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pawns;
-            }
-            evalText.setString(evalStr.str());
+            const CourseTrainer::EngineReadout& text = currentLineText[i];
+            evalText.setString(text.eval);
             evalText.setPosition(25.0f, yOffset);
             window->draw(evalText);
 
@@ -1330,19 +1663,7 @@ void Game::renderAnalysisPanel() {
             movesText.setFont(font);
             movesText.setCharacterSize(13);
             movesText.setFillColor(sf::Color(180, 180, 180));
-            std::ostringstream movesStr;
-            for (size_t j = 0; j < line.pv.size() && j < 5; j++) {
-                std::string move = line.pv[j];
-                if (move.length() >= 4) {
-                    std::string from = move.substr(0, 2);
-                    std::string to = move.substr(2, 2);
-                    from[0] = toupper(from[0]);
-                    to[0] = toupper(to[0]);
-                    movesStr << from << to;
-                    if (j < line.pv.size() - 1 && j < 4) movesStr << " ";
-                }
-            }
-            movesText.setString(movesStr.str());
+            movesText.setString(text.pv);
             movesText.setPosition(80.0f, yOffset);
             window->draw(movesText);
 
@@ -1360,14 +1681,9 @@ void Game::renderAnalysisPanel() {
     panel.setFillColor(sf::Color(20, 20, 20));
     window->draw(panel);
 
-    // Get current turn - we'll show evaluation from their perspective
-    PieceColor currentTurn = board->getCurrentTurn();
-
     // Render each line
     float yOffset = 360.0f;
-    for (size_t i = 0; i < currentLines.size() && i < 3; i++) {
-        const EngineLine& line = currentLines[i];
-
+    for (size_t i = 0; i < currentLineText.size() && i < 3; i++) {
         sf::CircleShape indicator(8.0f);
         indicator.setPosition(8.0f, yOffset + 4.0f);
         if (i == 0) indicator.setFillColor(sf::Color(0, 200, 0));
@@ -1380,18 +1696,8 @@ void Game::renderAnalysisPanel() {
         evalText.setCharacterSize(14);
         evalText.setFillColor(sf::Color::White);
 
-        int displayScore = line.score;
-        if (currentTurn == PieceColor::BLACK) displayScore = -displayScore;
-        std::ostringstream evalStr;
-        if (line.mate != 0) {
-            int moves = (std::abs(line.mate) + 1) / 2;
-            bool currentMating = (currentTurn == PieceColor::WHITE) ? (line.mate > 0) : (line.mate < 0);
-            evalStr << (currentMating ? "M" : "M-") << moves;
-        } else {
-            float pawns = displayScore / 100.0f;
-            evalStr << (pawns >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pawns;
-        }
-        evalText.setString(evalStr.str());
+        const CourseTrainer::EngineReadout& text = currentLineText[i];
+        evalText.setString(text.eval);
         evalText.setPosition(25.0f, yOffset);
         window->draw(evalText);
 
@@ -1399,19 +1705,7 @@ void Game::renderAnalysisPanel() {
         movesText.setFont(font);
         movesText.setCharacterSize(13);
         movesText.setFillColor(sf::Color(180, 180, 180));
-        std::ostringstream movesStr;
-        for (size_t j = 0; j < line.pv.size() && j < 5; j++) {
-            std::string move = line.pv[j];
-            if (move.length() >= 4) {
-                std::string from = move.substr(0, 2);
-                std::string to = move.substr(2, 2);
-                from[0] = toupper(from[0]);
-                to[0] = toupper(to[0]);
-                movesStr << from << to;
-                if (j < line.pv.size() - 1 && j < 4) movesStr << " ";
-            }
-        }
-        movesText.setString(movesStr.str());
+        movesText.setString(text.pv);
         movesText.setPosition(80.0f, yOffset);
         window->draw(movesText);
 

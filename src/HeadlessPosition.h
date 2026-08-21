@@ -48,6 +48,20 @@ public:
     bool decodeSan(const std::string& san, Move& move) const;
     bool applyMove(const Move& move);
     std::string getFEN() const;
+    bool setFEN(const std::string& fen);
+
+    // Every legal move for the side to move. Used for SAN disambiguation and
+    // for telling check from checkmate.
+    std::vector<Move> legalMoves() const;
+
+    // "e2e4" / "e7e8q" -> the matching legal move.
+    bool decodeUci(const std::string& uci, Move& move) const;
+
+    // The move written the way a human reads it: "Nf3", "exd5", "O-O",
+    // "Rae1", "e8=Q+", "Qxf7#".
+    std::string toSan(const Move& move) const;
+
+    bool isInCheck(PieceColor color) const;
 
     static PieceColor opposite(PieceColor color);
 
@@ -98,5 +112,12 @@ private:
     void updateCastlingRights(const Move& move);
     void updateCastlingRightsForCapture(int targetIndex);
 };
+
+// Renders an engine principal variation the way an analysis board does:
+// "12.Nf3 d6 13.d4 cxd4" - real SAN, numbered from the position the search
+// started in, and starting with "12..." when it is Black to move.
+std::string formatPvSan(const std::string& startFen,
+                        const std::vector<std::string>& uciMoves,
+                        std::size_t maxPlies);
 
 } // namespace analysis

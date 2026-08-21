@@ -8,9 +8,9 @@
 struct EngineLine {
     std::string move;           // Best move in this line (e.g., "e2e4")
     std::vector<std::string> pv; // Principal variation (sequence of moves)
-    int score;                  // Evaluation in centipawns (+100 = +1.0 pawn advantage)
-    int depth;                  // Search depth
-    int mate;                   // Mate in plies (0 = checkmate on board, >0 side to move mates in N plies, <0 side to move is mated in N plies)
+    int score = 0;              // Evaluation in centipawns (+100 = +1.0 pawn advantage)
+    int depth = 0;              // Search depth
+    int mate = 0;               // Mate in plies (0 = checkmate on board, >0 side to move mates in N plies, <0 side to move is mated in N plies)
 };
 
 class StockfishEngine {
@@ -24,6 +24,12 @@ private:
 
     bool isRunning;
     bool isReady;
+
+    // Deepest line seen so far for each MultiPV slot in the current search.
+    // Stockfish streams one "info ... pv ..." per slot per iteration, so the
+    // shallow early iterations have to be superseded rather than kept, and a
+    // poll that catches no new output must still return the last good set.
+    std::vector<EngineLine> latestLines;
 
     // Helper methods
     bool createChildProcess(const std::string& exePath);

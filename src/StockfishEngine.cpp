@@ -182,6 +182,7 @@ std::vector<std::string> StockfishEngine::readAllLines(int timeoutMs) {
 bool StockfishEngine::sendPosition(const std::string& fen) {
     if (!isReady) return false;
 
+    latestLines.clear();
     std::string command = "position fen " + fen + "\n";
     writeToPipe(command);
     return true;
@@ -190,6 +191,8 @@ bool StockfishEngine::sendPosition(const std::string& fen) {
 bool StockfishEngine::startAnalysis(int depth, int multiPV) {
     if (!isReady) return false;
 
+    // A new search invalidates the lines carried over from the previous one.
+    latestLines.clear();
     setMultiPV(multiPV);
 
     std::string command = "go depth " + std::to_string(depth) + "\n";
@@ -204,61 +207,68 @@ void StockfishEngine::stopAnalysis() {
 }
 
 std::vector<EngineLine> StockfishEngine::getBestLines(int count) {
-    std::vector<EngineLine> lines;
-
-    // Read all available output
+    // Read whatever the engine has emitted since the last poll.
     auto outputLines = readAllLines(500);
 
-    // Parse info lines
     for (const auto& line : outputLines) {
-        if (line.find("info") == 0 && line.find("pv") != std::string::npos) {
-            EngineLine engineLine;
-            engineLine.score = 0;
-            engineLine.depth = 0;
-            engineLine.mate = 0;
-            std::istringstream iss(line);
-            std::string token;
+        if (line.find("info") != 0 || line.find(" pv ") == std::string::npos) continue;
 
-            bool readingPV = false;
-            while (iss >> token) {
-                if (token == "depth") {
-                    iss >> engineLine.depth;
+        EngineLine engineLine;
+        engineLine.score = 0;
+        engineLine.depth = 0;
+        engineLine.mate = 0;
+        int multiPV = 1;
+
+        std::istringstream iss(line);
+        std::string token;
+        bool readingPV = false;
+        while (iss >> token) {
+            if (token == "depth") {
+                iss >> engineLine.depth;
+            }
+            else if (token == "multipv") {
+                iss >> multiPV;
+            }
+            else if (token == "score") {
+                iss >> token; // "cp" or "mate"
+                if (token == "cp") {
+                    iss >> engineLine.score;
+                    engineLine.mate = 0; // not a mate score
                 }
-                else if (token == "score") {
-                    iss >> token; // "cp" or "mate"
-                    if (token == "cp") {
-                        iss >> engineLine.score;
-                        engineLine.mate = 0; // not a mate score
-                    }
-                    else if (token == "mate") {
-                        int mateIn;
-                        iss >> mateIn;
-                        engineLine.mate = mateIn; // store plies directly
-                        engineLine.score = (mateIn > 0) ? 10000 : -10000;
-                    }
-                }
-                else if (token == "pv") {
-                    readingPV = true;
-                }
-                else if (readingPV) {
-                    engineLine.pv.push_back(token);
-                    if (engineLine.move.empty()) {
-                        engineLine.move = token;
-                    }
+                else if (token == "mate") {
+                    int mateIn;
+                    iss >> mateIn;
+                    engineLine.mate = mateIn; // store plies directly
+                    engineLine.score = (mateIn > 0) ? 10000 : -10000;
                 }
             }
-
-            if (!engineLine.move.empty()) {
-                lines.push_back(engineLine);
+            else if (token == "pv") {
+                readingPV = true;
             }
+            else if (readingPV) {
+                engineLine.pv.push_back(token);
+                if (engineLine.move.empty()) {
+                    engineLine.move = token;
+                }
+            }
+        }
+
+        if (engineLine.move.empty() || multiPV < 1) continue;
+
+        // Later iterations of the same slot replace earlier, shallower ones.
+        const size_t slot = static_cast<size_t>(multiPV - 1);
+        if (latestLines.size() <= slot) latestLines.resize(slot + 1);
+        if (engineLine.depth >= latestLines[slot].depth || latestLines[slot].move.empty()) {
+            latestLines[slot] = engineLine;
         }
     }
 
-    // Return only the requested count
-    if (lines.size() > (size_t)count) {
-        lines.resize(count);
+    std::vector<EngineLine> lines;
+    for (const auto& l : latestLines) {
+        if (l.move.empty()) continue;          // slot not filled yet
+        lines.push_back(l);
+        if (lines.size() >= static_cast<size_t>(count)) break;
     }
-
     return lines;
 }
 

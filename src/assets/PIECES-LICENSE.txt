@@ -1,0 +1,29 @@
+Chess piece artwork
+===================
+
+The twelve piece images (white_*.png, black_*.png) are the "Cburnett" set:
+SVG chess pieces by Colin M.L. Burnett, from Wikimedia Commons. They are the
+same drawings this project already used - the previous copies were simply the
+45-pixel renders, which went soft once the board could be drawn larger. These
+are re-rendered from the same SVGs at 330 pixels and scaled down at draw time.
+
+  Source:  https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces
+  Author:  Colin M.L. Burnett (User:Cburnett)
+  Licence: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+           https://creativecommons.org/licenses/by-sa/3.0/
+           also GFDL and BSD, at your option
+
+CC BY-SA requires that the author is credited and that redistributed copies
+(including modified ones) carry the same licence. Keeping this file next to the
+images satisfies that.
+
+The originals are preserved in original-45px/ in case they are ever wanted back.
+
+To re-render at a different size, fetch:
+  https://commons.wikimedia.org/wiki/Special:FilePath/Chess_klt45.svg?width=512
+substituting the piece code: p/n/b/r/q/k, then l (light) or d (dark), then t.
+Wikimedia rate-limits anonymous fetches - send a descriptive User-Agent and
+leave a second or so between requests.
+
+The board itself is no longer an image; Board::renderBoard() draws the squares
+and the rank/file labels, which stay crisp at any size.

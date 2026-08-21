@@ -34,6 +34,10 @@ private:
 public:
     EvalBar(sf::RenderWindow* window, sf::Font* font, int x, int y, int width, int height);
 
+    // Moves and resizes the bar; course mode draws a larger board and the bar
+    // has to sit beside it.
+    void setGeometry(int x, int y, int width, int height);
+
     void setEvaluation(float centipawns);
     void setMateEvaluation(int matePlies, bool whiteWinning);
     void setVisible(bool visible);

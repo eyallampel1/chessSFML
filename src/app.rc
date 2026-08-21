@@ -1,0 +1,33 @@
+#include <windows.h>
+
+/* Explorer shows the icon resource with the lowest ordinal, so this stays 1. */
+1 ICON "assets/icon.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+ FILEFLAGS      0
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"          /* US English, Unicode */
+        BEGIN
+            VALUE "CompanyName",      "Eyal Lampel"
+            VALUE "FileDescription",  "LampelChess - chess trainer and opening course"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "LampelChess"
+            VALUE "LegalCopyright",   "Made By Eyal Lampel"
+            VALUE "OriginalFilename", "LampelChess.exe"
+            VALUE "ProductName",      "LampelChess"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
