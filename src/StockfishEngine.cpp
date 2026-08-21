@@ -1,6 +1,7 @@
 #include "StockfishEngine.h"
 #include <iostream>
 #include <sstream>
+#include <chrono>
 #include <algorithm>
 
 StockfishEngine::StockfishEngine()
@@ -260,6 +261,127 @@ std::vector<EngineLine> StockfishEngine::getBestLines(int count) {
 
     return lines;
 }
+
+
+bool StockfishEngine::analyzeBlocking(const std::string& fen, int depth, EngineLine& bestLine, int multiPV, int maxWaitMs) {
+    if (!isReady) return false;
+
+    stopAnalysis();
+    readAllLines(50);
+
+    if (!sendPosition(fen)) {
+        return false;
+    }
+
+    if (multiPV < 1) multiPV = 1;
+    setMultiPV(multiPV);
+
+    std::string command = "go depth " + std::to_string(depth) + "\n";
+    writeToPipe(command);
+
+    std::vector<EngineLine> lines(static_cast<std::size_t>(multiPV));
+    std::vector<bool> lineSeen(static_cast<std::size_t>(multiPV), false);
+    EngineLine fallback{};
+
+    auto start = std::chrono::steady_clock::now();
+    const auto maxWait = (maxWaitMs > 0)
+        ? std::chrono::milliseconds(maxWaitMs)
+        : std::chrono::milliseconds((std::max)(2000, depth * 4000));
+
+    bool sawBestmove = false;
+
+    while (!sawBestmove) {
+        auto outputLines = readAllLines(200);
+        for (const auto& line : outputLines) {
+            if (line.rfind("info", 0) == 0 && line.find("pv") != std::string::npos) {
+                EngineLine parsed{};
+                parsed.score = 0;
+                parsed.depth = 0;
+                parsed.mate = 0;
+                int multipvIndex = 1;
+                bool readingPV = false;
+                std::istringstream iss(line);
+                std::string token;
+                while (iss >> token) {
+                    if (token == "depth") {
+                        iss >> parsed.depth;
+                    } else if (token == "score") {
+                        if (iss >> token) {
+                            if (token == "cp") {
+                                iss >> parsed.score;
+                                parsed.mate = 0;
+                            } else if (token == "mate") {
+                                iss >> parsed.mate;
+                                parsed.score = (parsed.mate > 0) ? 10000 : -10000;
+                            }
+                        }
+                    } else if (token == "multipv") {
+                        iss >> multipvIndex;
+                    } else if (token == "pv") {
+                        readingPV = true;
+                    } else if (readingPV) {
+                        parsed.pv.push_back(token);
+                        if (parsed.move.empty()) parsed.move = token;
+                    }
+                }
+                if (multipvIndex < 1) multipvIndex = 1;
+                if (multipvIndex > multiPV) multipvIndex = multiPV;
+                lines[static_cast<std::size_t>(multipvIndex - 1)] = parsed;
+                lineSeen[static_cast<std::size_t>(multipvIndex - 1)] = true;
+            } else if (line.rfind("bestmove", 0) == 0) {
+                std::istringstream iss(line);
+                std::string token;
+                iss >> token; // bestmove
+                if (iss >> token) {
+                    fallback.move = token;
+                    fallback.pv.clear();
+                    fallback.pv.push_back(token);
+                    fallback.depth = depth;
+                    fallback.score = 0;
+                    fallback.mate = 0;
+                }
+                sawBestmove = true;
+                break;
+            }
+        }
+        if (!sawBestmove) {
+            if (std::chrono::steady_clock::now() - start > maxWait) {
+                break;
+            }
+        }
+    }
+
+    EngineLine selected{};
+    bool haveSelected = false;
+    for (std::size_t i = 0; i < lineSeen.size(); ++i) {
+        if (lineSeen[i]) {
+            selected = lines[i];
+            haveSelected = true;
+            break;
+        }
+    }
+
+    if (!haveSelected) {
+        if (!fallback.move.empty()) {
+            bestLine = fallback;
+            return true;
+        }
+        return false;
+    }
+
+    if (selected.move.empty() && !fallback.move.empty()) {
+        selected.move = fallback.move;
+        selected.pv = fallback.pv;
+    }
+
+    if (selected.pv.empty() && !selected.move.empty()) {
+        selected.pv.push_back(selected.move);
+    }
+
+    bestLine = selected;
+    return !bestLine.move.empty();
+}
+
 
 int StockfishEngine::getEvaluation() {
     auto lines = getBestLines(1);

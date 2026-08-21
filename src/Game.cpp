@@ -1,4 +1,5 @@
-﻿#include "Game.h"
+#include "Game.h"
+#include "PgnAnalyzer.h"
 #include <SFML/Graphics/Color.hpp>
 #include <SFML/Graphics/RenderTarget.hpp>
 #include <SFML/Graphics/RenderWindow.hpp>
@@ -17,6 +18,10 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <cctype>
+#include <filesystem>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 Game::Game(){
 	this->initWindow();
@@ -75,6 +80,11 @@ Game::~Game(){
 	delete evalBar;
 	delete arrowManager;
 	if (userDb) { userDb->save(); delete userDb; userDb = nullptr; }
+
+	bulkAnalysisCancel.store(true);
+	if (bulkAnalysisThread.joinable()) {
+		bulkAnalysisThread.join();
+	}
 
 	// Clean up buttons
 	for (auto btn : buttons) {
@@ -907,10 +917,28 @@ void Game::initButtons() {
         }
     });
     buttons.push_back(changeCsvButton);
+
+    analyzePgnButton = new Button(window, &font, "Analyze PGN", panelX + 10, 10 + (buttonHeight + spacing) * 9, buttonWidth, buttonHeight);
+    analyzePgnButton->setOnClick([this]() {
+        if (bulkAnalysisActive.load()) {
+            setStatusMessage("Analysis already running");
+            return;
+        }
+        std::string path = openFileDialog();
+        if (path.empty()) {
+            setStatusMessage("Analysis cancelled");
+            return;
+        }
+        startBulkAnalysis(path);
+    });
+    buttons.push_back(analyzePgnButton);
 }
 
 void Game::updateButtons() {
 	sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
+	if (analyzePgnButton) {
+		analyzePgnButton->setEnabled(!bulkAnalysisActive.load());
+	}
 	for (auto btn : buttons) {
 		btn->update(mousePos);
 	}
@@ -933,8 +961,7 @@ void Game::renderUI() {
 	{
 		const float buttonHeight = 35.0f;
 		const float spacing = 10.0f;
-		// Place below the last button row (we currently render 9 rows: 0..8)
-		const float baseY = 10.0f + (buttonHeight + spacing) * 9;
+		const float baseY = 10.0f + (buttonHeight + spacing) * 10;
 		sf::Text turnText;
 		turnText.setFont(font);
 		turnText.setCharacterSize(16);
@@ -1014,6 +1041,78 @@ void Game::renderUI() {
 		arrowIndicator.setPosition(520.0f, helpY);
 		window->draw(arrowIndicator);
 	}
+
+{
+	const float buttonHeight = 35.0f;
+	const float spacing = 10.0f;
+	BulkProgress progressSnapshot;
+	std::string messageCopy;
+	bool active = bulkAnalysisActive.load();
+	{
+		std::lock_guard<std::mutex> lock(bulkProgressMutex);
+		progressSnapshot = bulkProgress;
+		messageCopy = bulkMessage;
+	}
+	if (!messageCopy.empty() && bulkMessageClock.getElapsedTime().asSeconds() > 8.0f) {
+		std::lock_guard<std::mutex> lock(bulkProgressMutex);
+		if (bulkMessageClock.getElapsedTime().asSeconds() > 8.0f) {
+			bulkMessage.clear();
+			messageCopy.clear();
+		}
+	}
+	if (active || !messageCopy.empty()) {
+		const float progressX = 392.0f + 10.0f;
+		const float progressY = 10.0f + (buttonHeight + spacing) * 10 + 40.0f;
+		const float barWidth = 180.0f;
+		const float barHeight = 14.0f;
+
+		float ratio = 0.0f;
+		if (progressSnapshot.positionCount > 0) {
+			ratio = static_cast<float>(progressSnapshot.positionIndex) /
+			        static_cast<float>(progressSnapshot.positionCount);
+			if (ratio < 0.0f) ratio = 0.0f; else if (ratio > 1.0f) ratio = 1.0f;
+		}
+
+		sf::RectangleShape bg(sf::Vector2f(barWidth, barHeight));
+		bg.setPosition(progressX, progressY);
+		bg.setFillColor(sf::Color(45, 45, 45));
+		bg.setOutlineColor(sf::Color(90, 90, 90));
+		bg.setOutlineThickness(1.0f);
+		window->draw(bg);
+
+		sf::RectangleShape fill(sf::Vector2f(barWidth * ratio, barHeight));
+		fill.setPosition(progressX, progressY);
+		fill.setFillColor(sf::Color(120, 180, 250));
+		window->draw(fill);
+
+		sf::Text progressText;
+		progressText.setFont(font);
+		progressText.setCharacterSize(12);
+		progressText.setFillColor(sf::Color(200, 200, 200));
+		std::ostringstream statusLine;
+		if (!progressSnapshot.label.empty() && active) {
+			statusLine << progressSnapshot.label << "  ";
+		}
+		if (progressSnapshot.positionCount > 0) {
+			statusLine << progressSnapshot.positionIndex << "/" << progressSnapshot.positionCount;
+		} else if (active) {
+			statusLine << "Preparing...";
+		}
+		progressText.setString(statusLine.str());
+		progressText.setPosition(progressX, progressY - 18.0f);
+		window->draw(progressText);
+
+		if (!messageCopy.empty()) {
+			sf::Text msg;
+			msg.setFont(font);
+			msg.setCharacterSize(12);
+			msg.setFillColor(sf::Color(210, 210, 210));
+			msg.setString(messageCopy);
+			msg.setPosition(progressX, progressY + barHeight + 6.0f);
+			window->draw(msg);
+		}
+	}
+}
 }
 
 void Game::setStatusMessage(const std::string& message) {
@@ -1491,3 +1590,77 @@ std::string Game::openCSVFileDialog() {
 
 
 
+void Game::startBulkAnalysis(const std::string& filePath) {
+    if (bulkAnalysisActive.load()) {
+        setStatusMessage("Analysis already running");
+        return;
+    }
+
+    if (bulkAnalysisThread.joinable()) {
+        bulkAnalysisCancel.store(true);
+        bulkAnalysisThread.join();
+    }
+
+    bulkAnalysisCancel.store(false);
+    bulkAnalysisActive.store(true);
+    {
+        std::lock_guard<std::mutex> lock(bulkProgressMutex);
+        bulkProgress = BulkProgress{};
+        bulkProgress.label = std::filesystem::path(filePath).filename().string();
+        bulkOutputPath.clear();
+        bulkMessage.clear();
+        bulkAnalysisCompleted = false;
+    }
+    bulkMessageClock.restart();
+    setStatusMessage("Analyzing PGN...");
+
+    bulkAnalysisThread = std::thread([this, filePath]() {
+        analysis::PgnBulkAnalyzer analyzer;
+        analysis::AnalyzerOptions opts;
+        opts.analysisDepth = 16;
+        opts.minCentipawnSwing = 150;
+        opts.maxPrincipalVariation = 6;
+        unsigned hw = std::thread::hardware_concurrency();
+        if (hw == 0) hw = 2;
+        opts.engineThreads = static_cast<int>(std::max(1u, hw / 2));
+
+        std::string outputPath;
+        try {
+            std::filesystem::path input(filePath);
+            std::filesystem::path parent = input.parent_path();
+            std::string stem = input.stem().string();
+            if (stem.empty()) stem = "analysis";
+            outputPath = (parent / (stem + "_tactics.csv")).string();
+        } catch (...) {
+            outputPath = filePath + "_tactics.csv";
+        }
+
+        auto progressCb = [this](const analysis::AnalyzerProgress& prog) {
+            std::lock_guard<std::mutex> lock(bulkProgressMutex);
+            bulkProgress.gameIndex = prog.gameIndex;
+            bulkProgress.gameCount = prog.gameCount;
+            bulkProgress.positionIndex = prog.positionIndex;
+            bulkProgress.positionCount = prog.positionCount;
+            bulkProgress.label = prog.currentLabel;
+        };
+
+        std::string error;
+        bool ok = analyzer.analyzeFile(filePath, outputPath, opts, progressCb, bulkAnalysisCancel, error);
+
+        {
+            std::lock_guard<std::mutex> lock(bulkProgressMutex);
+            bulkAnalysisCompleted = true;
+            if (bulkAnalysisCancel.load()) {
+                bulkMessage = "Analysis cancelled";
+            } else if (ok) {
+                bulkOutputPath = outputPath;
+                bulkMessage = "Analysis complete: " + outputPath;
+            } else {
+                bulkMessage = error.empty() ? "Analysis failed" : error;
+            }
+            bulkMessageClock.restart();
+        }
+
+        bulkAnalysisActive.store(false);
+    });
+}

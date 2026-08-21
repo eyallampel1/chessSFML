@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -102,14 +102,18 @@
     <ClCompile Include="src\EvalBar.cpp" />
     <ClCompile Include="src\Arrow.cpp" />
     <ClCompile Include="src\Button.cpp" />
-    <ClCompile Include="src\BoardHistory.cpp" />
+    <ClCompile Include="src\\BoardHistory.cpp" />
+    <ClCompile Include="src\\HeadlessPosition.cpp" />
+    <ClCompile Include="src\\PgnAnalyzer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Board.h" />
     <ClInclude Include="src\UserDB.h" />
     <ClInclude Include="src\checkIfLegal.h" />
     <ClInclude Include="src\Coordinate.h" />
-    <ClInclude Include="src\Game.h" />
+    <ClInclude Include="src\\Game.h" />
+    <ClInclude Include="src\\HeadlessPosition.h" />
+    <ClInclude Include="src\\PgnAnalyzer.h" />
     <ClInclude Include="src\Pawn.h" />
     <ClInclude Include="src\Piece.h" />
     <ClInclude Include="src\StockfishEngine.h" />

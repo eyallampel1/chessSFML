@@ -2,12 +2,13 @@
 
 Button::Button(sf::RenderWindow* window, sf::Font* font, const std::string& label,
                float x, float y, float width, float height)
-    : window(window), font(font), label(label), isHovered(false), isPressed(false) {
+    : window(window), font(font), label(label), isHovered(false), isPressed(false), enabled(true) {
 
     // Colors
     normalColor = sf::Color(70, 70, 70);
     hoverColor = sf::Color(90, 90, 90);
     pressColor = sf::Color(50, 50, 50);
+    disabledColor = sf::Color(55, 55, 55);
     textColor = sf::Color::White;
 
     // Background
@@ -47,9 +48,15 @@ bool Button::contains(const sf::Vector2i& point) const {
 }
 
 void Button::update(const sf::Vector2i& mousePos) {
+    if (!enabled) {
+        background.setFillColor(disabledColor);
+        if (font) text.setFillColor(sf::Color(170, 170, 170));
+        return;
+    }
+
+    if (font) text.setFillColor(textColor);
     isHovered = contains(mousePos);
 
-    // Reset pressed state if mouse is released
     if (!sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
         isPressed = false;
     }
@@ -64,6 +71,7 @@ void Button::update(const sf::Vector2i& mousePos) {
 }
 
 void Button::handleClick(const sf::Vector2i& mousePos) {
+    if (!enabled) return;
     if (contains(mousePos)) {
         isPressed = true;
         if (onClick) {
@@ -80,11 +88,21 @@ void Button::render() {
     }
 }
 
+void Button::setEnabled(bool value) {
+    enabled = value;
+    if (!enabled) {
+        background.setFillColor(disabledColor);
+        if (font) text.setFillColor(sf::Color(170, 170, 170));
+    } else {
+        background.setFillColor(normalColor);
+        if (font) text.setFillColor(textColor);
+    }
+}
+
 void Button::setLabel(const std::string& newLabel) {
     label = newLabel;
     if (font) {
         text.setString(label);
-        // Re-center text within the background rect
         sf::FloatRect textBounds = text.getLocalBounds();
         sf::Vector2f pos = background.getPosition();
         sf::Vector2f size = background.getSize();
@@ -92,5 +110,8 @@ void Button::setLabel(const std::string& newLabel) {
             pos.x + (size.x - textBounds.width) / 2.0f - textBounds.left,
             pos.y + (size.y - textBounds.height) / 2.0f - textBounds.top
         );
+        if (!enabled) {
+            text.setFillColor(sf::Color(170, 170, 170));
+        }
     }
 }

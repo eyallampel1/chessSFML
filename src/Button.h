@@ -23,8 +23,10 @@ private:
 
     bool isHovered;
     bool isPressed;
+    bool enabled;
 
     sf::Color normalColor;
+    sf::Color disabledColor;
     sf::Color hoverColor;
     sf::Color pressColor;
     sf::Color textColor;
@@ -39,6 +41,9 @@ public:
     void render();
 
     bool contains(const sf::Vector2i& point) const;
+
+    void setEnabled(bool value);
+    bool isEnabled() const { return enabled; }
 
     // Update button label at runtime and re-center the text
     void setLabel(const std::string& newLabel);

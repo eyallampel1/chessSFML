@@ -16,6 +16,9 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 class Game
 {
@@ -60,6 +63,25 @@ class Game
         Button* puzzleAnalysisButton;
         Button* backToPuzzleButton;
         Button* changeCsvButton;
+        Button* analyzePgnButton;
+
+        // Bulk PGN analysis state
+        std::thread bulkAnalysisThread;
+        std::atomic<bool> bulkAnalysisActive{false};
+        std::atomic<bool> bulkAnalysisCancel{false};
+        struct BulkProgress {
+            std::size_t gameIndex = 0;
+            std::size_t gameCount = 0;
+            std::size_t positionIndex = 0;
+            std::size_t positionCount = 0;
+            std::string label;
+        };
+        std::mutex bulkProgressMutex;
+        BulkProgress bulkProgress;
+        std::string bulkOutputPath;
+        std::string bulkMessage;
+        bool bulkAnalysisCompleted = false;
+        sf::Clock bulkMessageClock;
 
 		// Status message
 		std::string statusMessage;
@@ -123,6 +145,7 @@ class Game
         void renderPuzzleMetadataPanel();
 
 		// File dialog helpers
+		void startBulkAnalysis(const std::string& filePath);
 		std::string openFileDialog();
 		std::string saveFileDialog();
         std::string openCSVFileDialog();

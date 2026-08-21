@@ -46,6 +46,7 @@ public:
 
     // Get analysis results
     std::vector<EngineLine> getBestLines(int count = 3);
+    bool analyzeBlocking(const std::string& fen, int depth, EngineLine& bestLine, int multiPV = 1, int maxWaitMs = 0);
     int getEvaluation(); // Returns centipawns (+100 = white is up 1 pawn)
     std::string getBestMove();
 
