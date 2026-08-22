@@ -43,6 +43,7 @@ param(
     [string]$OutDir,
     [string]$Names,
     [string]$Prefix = "",
+    [ValidateSet("Event","White","Black","Site")][string]$GroupBy,
     [switch]$Force
 )
 
@@ -83,23 +84,22 @@ $headers = New-Object System.Collections.ArrayList
 $moves = New-Object System.Collections.ArrayList
 $inMoves = $false
 
+function Get-Tag([object[]]$block, [string]$name) {
+    foreach ($h in $block) {
+        if ($h -match ('^\s*\[' + $name + '\s+"(.*)"\s*\]')) { return $Matches[1] }
+    }
+    return ""
+}
+
 function Save-Game {
     if ($headers.Count -eq 0 -and $moves.Count -eq 0) { return }
-    $ev = ""
-    foreach ($h in $headers) {
-        if ($h -match '^\s*\[Event\s+"(.*)"\s*\]') { $ev = $Matches[1]; break }
-    }
-    # "Chapter 7 (2)" -> chapter 7, section 2
-    $chapter = $ev
-    $section = ""
-    if ($ev -match '^\s*Chapter\s+(\d+)\s*(?:\((\d+)\))?') {
-        $chapter = $Matches[1]
-        if ($Matches[2]) { $section = $Matches[2] }
-    }
+    $block = @($headers.ToArray())
     [void]$games.Add([pscustomobject]@{
-        Chapter = $chapter
-        Section = $section
-        Headers = @($headers.ToArray())
+        Event   = (Get-Tag $block "Event")
+        White   = (Get-Tag $block "White")
+        Black   = (Get-Tag $block "Black")
+        Site    = (Get-Tag $block "Site")
+        Headers = $block
         Moves   = @($moves.ToArray())
     })
     $headers.Clear(); $moves.Clear()
@@ -121,6 +121,34 @@ Save-Game
 
 Write-Host "Found $($games.Count) games"
 if ($games.Count -eq 0) { throw "No games found - is this a PGN?" }
+
+# --- work out what a chapter is in this file --------------------------------
+
+# Exports do not agree. One tags every game "Chapter 7 (2)" in Event; another
+# leaves Event as "?" and puts the chapter name in White. Pick whichever tag
+# actually distinguishes the games.
+function Measure-Distinct([string]$tag) {
+    return @($games | ForEach-Object { $_.$tag } |
+             Where-Object { $_ -and $_ -ne "?" } | Sort-Object -Unique).Count
+}
+if (-not $GroupBy) {
+    $GroupBy = if ((Measure-Distinct "Event") -gt 1) { "Event" }
+               elseif ((Measure-Distinct "White") -gt 1) { "White" }
+               else { "Event" }
+}
+Write-Host "Grouping by the $GroupBy tag ($(Measure-Distinct $GroupBy) distinct values)"
+
+foreach ($g in $games) {
+    $key = $g.$GroupBy
+    $section = ""
+    # "Chapter 7 (2)" is chapter 7, section 2; anything else is its own chapter.
+    if ($key -match '^\s*Chapter\s+(\d+)\s*(?:\((\d+)\))?') {
+        $key = $Matches[1]
+        if ($Matches[2]) { $section = $Matches[2] }
+    }
+    Add-Member -InputObject $g -NotePropertyName Chapter -NotePropertyValue $key -Force
+    Add-Member -InputObject $g -NotePropertyName Section -NotePropertyValue $section -Force
+}
 
 # --- group and write --------------------------------------------------------
 
@@ -155,7 +183,11 @@ $index = 0
 $totalWritten = 0
 foreach ($chapter in $order) {
     $index++
-    $title = if ($titles.ContainsKey($chapter)) { $titles[$chapter] } else { "Chapter $chapter" }
+    # A numeric key needs a name from the table; a key that is already a chapter
+    # name ("4. Noteboom - Main Line") is its own title.
+    $title = if     ($titles.ContainsKey($chapter)) { $titles[$chapter] }
+             elseif ($chapter -match '^\d+$')       { "Chapter $chapter" }
+             else                                    { $chapter }
     $file = Join-Path $OutDir (ConvertTo-SafeName ("{0}{1:d2} - {2}.pgn" -f $Prefix, $index, $title))
 
     $chapterGames = @($games | Where-Object { $_.Chapter -eq $chapter })
@@ -164,10 +196,16 @@ foreach ($chapter in $order) {
 
     foreach ($g in $chapterGames) {
         $position++
-        # One running position number per chapter, so it identifies a position
-        # on its own rather than restarting in every section.
         $eventName = if ($g.Section) { "$title ($($g.Section))" } else { $title }
-        $siteName  = "Position $position"
+
+        # What to call this position. A repertoire names its lines in the Black
+        # tag and that is far more use than a number; a manual just writes
+        # "Game 12" there, which restarts every chapter, so number it instead.
+        $siteName = if ($g.Black -and $g.Black -ne "?" -and $g.Black -notmatch '^Game\s+\d+$') {
+            $g.Black
+        } else {
+            "Position $position"
+        }
 
         foreach ($h in $g.Headers) {
             if     ($h -match '^\s*\[Event\s') { [void]$out.AppendLine("[Event `"$eventName`"]") }

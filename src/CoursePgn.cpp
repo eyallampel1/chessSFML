@@ -119,6 +119,23 @@ std::string cleanComment(const std::string& raw) {
         pos += 2;
     }
 
+    // Chessable exports carry their own markup. An inline diagram is a FEN the
+    // reader cannot use as text, so it goes; the bracket markers are just
+    // parentheses spelled the long way.
+    for (std::size_t pos = 0; (pos = text.find("@@StartFEN@@", pos)) != std::string::npos; ) {
+        const std::size_t end = text.find("@@EndFEN@@", pos);
+        if (end == std::string::npos) { text.erase(pos); break; }
+        text.erase(pos, end + 10 - pos);
+    }
+    auto replaceAll = [&text](const std::string& from, const std::string& to) {
+        for (std::size_t pos = 0; (pos = text.find(from, pos)) != std::string::npos; ) {
+            text.replace(pos, from.size(), to);
+            pos += to.size();
+        }
+    };
+    replaceAll("@@StartBracket@@", "(");
+    replaceAll("@@EndBracket@@", ")");
+
     // Markdown emphasis around key squares ("the **d6** -pawn").
     for (std::size_t pos = 0; (pos = text.find("**", pos)) != std::string::npos; ) {
         text.erase(pos, 2);
@@ -190,7 +207,7 @@ bool looksLikeTagPair(const std::string& t) {
 // that carries the position the game starts from. `positionAfter` stays index
 // aligned with `out.nodes`.
 bool parseGame(const std::string& movetext, const std::string& startFen,
-               const std::string& label, Chapter& out,
+               const std::string& label, const std::string& displayLabel, Chapter& out,
                std::vector<analysis::HeadlessPosition>& positionAfter,
                std::string& error) {
     analysis::HeadlessPosition startPosition;
@@ -356,7 +373,7 @@ bool parseGame(const std::string& movetext, const std::string& startFen,
     }
 
     out.gameRoots.push_back(rootNode);
-    out.gameLabels.push_back(label);
+    out.gameLabels.push_back(displayLabel);
     return true;
 }
 
@@ -379,7 +396,7 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
     // whole path each time would be quadratic.
     std::vector<analysis::HeadlessPosition> positionAfter;
 
-    std::string tagEvent, tagAnnotator, tagWhite, tagSite, tagFen;
+    std::string tagEvent, tagAnnotator, tagWhite, tagBlack, tagSite, tagFen;
     std::string movetext;
     bool inMovetext = false;
     std::string firstError;
@@ -399,13 +416,23 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
 
         // A collection numbers its games per chapter, so "Game 16" occurs
         // dozens of times; the Event tag is what tells them apart.
-        std::string label;
-        if (!tagEvent.empty() && !tagSite.empty())  label = tagEvent + " " + tagSite;
-        else if (!tagSite.empty())                  label = tagSite;
-        else if (!tagEvent.empty())                 label = tagEvent;
-        else                                        label = "Game " + std::to_string(gameCount);
+        // Exports disagree about which tag carries the name: one puts a
+        // position number in Site, another the variation name in Black and
+        // leaves Event as "?". Take the most specific one actually filled in.
+        auto useful = [](const std::string& s) { return !s.empty() && s != "?"; };
+        std::string display;
+        if      (useful(tagSite))  display = tagSite;
+        else if (useful(tagBlack)) display = tagBlack;
+        else if (useful(tagEvent)) display = tagEvent;
+        else                       display = "Game " + std::to_string(gameCount);
+
+        // Errors get the Event as well, since a collection restarts its game
+        // numbering in every chapter and "Game 16" alone occurs dozens of times.
+        std::string label = display;
+        if (useful(tagEvent) && tagEvent != display) label = tagEvent + " " + display;
+
         std::string err;
-        if (!parseGame(movetext, tagFen, label, out, positionAfter, err)) {
+        if (!parseGame(movetext, tagFen, label, display, out, positionAfter, err)) {
             // One unreadable game in a large collection should not cost the
             // reader the other sixteen hundred.
             ++failed;
@@ -413,7 +440,7 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
         }
 
         tagEvent.clear(); tagAnnotator.clear(); tagWhite.clear();
-        tagSite.clear(); tagFen.clear();
+        tagBlack.clear(); tagSite.clear(); tagFen.clear();
         movetext.clear();
         inMovetext = false;
     };
@@ -436,6 +463,7 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
                 else if (key == "Annotator") tagAnnotator = value;
                 else if (key == "White") tagWhite = value;
                 else if (key == "Site") tagSite = value;
+                else if (key == "Black") tagBlack = value;
                 else if (key == "FEN") tagFen = value;
             }
             continue;
