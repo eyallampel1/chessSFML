@@ -179,6 +179,7 @@ private:
     Button* lineButton = nullptr;   // "Next Line" / "Skip Line"
     Button* evalButton = nullptr;
     Button* linesButton = nullptr;
+    Button* positionButton = nullptr;
     // The chapter list fills the window, so it gets its own footer controls
     // rather than sharing the study panel's.
     std::vector<Button*> pickerButtons;
@@ -207,6 +208,11 @@ private:
     int currentRoot = 0;
     int currentNode() const { return path.empty() ? currentRoot : path.back(); }
     void setUpGame(int root);   // puts the game's starting position on the board
+
+    // A collection is a list of positions to study, so it needs navigating by
+    // position as well as by line.
+    int currentGameIndex() const;
+    void gotoGame(int index);
     const course::MoveNode& node(int id) const { return chapter.nodes[static_cast<std::size_t>(id)]; }
 
     // learn

@@ -218,6 +218,8 @@ bool CourseTrainer::openChapter(int index) {
 
     if (mode == Mode::Drill) {
         startCard(pickNextCard());
+    } else if (chapter.gameRoots.size() > 1) {
+        gotoGame(0);   // announces which position of how many we are on
     } else {
         setFeedback("Right/Left walk the line, Up/Down switch variation", kTextDim);
     }
@@ -301,6 +303,39 @@ void CourseTrainer::playVariation(int childIndex) {
     if (childIndex < 0 || childIndex >= static_cast<int>(kids.size())) return;
     variationCursor = childIndex;
     stepForward();
+}
+
+int CourseTrainer::currentGameIndex() const {
+    const auto it = std::find(chapter.gameRoots.begin(), chapter.gameRoots.end(), currentRoot);
+    return (it == chapter.gameRoots.end())
+         ? 0 : static_cast<int>(std::distance(chapter.gameRoots.begin(), it));
+}
+
+// Moves to another position in the collection. An opening chapter holds one
+// game and this does nothing useful; a manual holds hundreds, and stepping
+// between them is the main way to read it.
+void CourseTrainer::gotoGame(int index) {
+    if (chapter.gameRoots.empty()) return;
+    const int n = static_cast<int>(chapter.gameRoots.size());
+    const int wrapped = ((index % n) + n) % n;
+    const int root = chapter.gameRoots[static_cast<std::size_t>(wrapped)];
+
+    // Keep the line cursor with the position, so Next Line carries on from
+    // here rather than from wherever it had got to.
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (lines[i].root != root) continue;
+        if (mode == Mode::Drill) { startCard(static_cast<int>(i)); return; }
+        learnLineIndex = static_cast<int>(i);
+        break;
+    }
+
+    setUpGame(root);
+    std::ostringstream note;
+    note << "Position " << (wrapped + 1) << " of " << n;
+    if (wrapped < static_cast<int>(chapter.gameLabels.size())) {
+        note << "  \xe2\x80\x94  " << chapter.gameLabels[static_cast<std::size_t>(wrapped)];
+    }
+    setFeedback(note.str(), kAccent);
 }
 
 void CourseTrainer::gotoLine(int index) {
@@ -575,6 +610,8 @@ bool CourseTrainer::handleKey(sf::Keyboard::Key key) {
     // Available in both modes.
     if (key == sf::Keyboard::E) { toggleEval();  return true; }
     if (key == sf::Keyboard::L) { toggleLines(); return true; }
+    if (key == sf::Keyboard::PageDown) { gotoGame(currentGameIndex() + 1); return true; }
+    if (key == sf::Keyboard::PageUp)   { gotoGame(currentGameIndex() - 1); return true; }
 
     if (mode == Mode::Learn) {
         switch (key) {
@@ -688,6 +725,10 @@ void CourseTrainer::buildButtons() {
     linesButton->setOnClick([this]() { toggleLines(); });
     buttons.push_back(linesButton);
 
+    positionButton = new Button(window, font, "Next Position", colX(2), row3, w, h);
+    positionButton->setOnClick([this]() { gotoGame(currentGameIndex() + 1); });
+    buttons.push_back(positionButton);
+
     // Chapter-picker footer.
     const float footerY = ui.windowH - 44.0f;
     auto* folderButton = new Button(window, font, "Change Course Folder", 60.0f, footerY, 200.0f, 30.0f);
@@ -715,7 +756,7 @@ void CourseTrainer::positionButtons() {
     Button* const grid[3][3] = {
         { chaptersButton, modeButton,  exitButton  },
         { prevButton,     nextButton,  lineButton  },
-        { evalButton,     linesButton, nullptr     },
+        { evalButton,     linesButton, positionButton },
     };
     const float rowY[3] = { row1, row2, row3 };
 
@@ -933,10 +974,17 @@ void CourseTrainer::renderStudyPanel() {
 
     {
         std::ostringstream sub;
-        sub << (mode == Mode::Learn ? "Learn" : "Drill") << "  |  " << lines.size() << " lines";
+        sub << (mode == Mode::Learn ? "Learn" : "Drill");
+        // A collection is measured in positions; an opening chapter is one
+        // game and only its line count means anything.
+        const std::size_t games = chapter.gameRoots.size();
+        if (games > 1) {
+            sub << "  |  position " << (currentGameIndex() + 1) << " of " << games;
+        }
+        sub << "  |  " << lines.size() << " lines";
         if (mode == Mode::Drill && cardIndex >= 0) {
-            sub << "  |  line " << (cardIndex + 1) << "  |  ply "
-                << drillPos << "/" << lines[static_cast<std::size_t>(cardIndex)].nodeIds.size();
+            sub << "  |  ply " << drillPos << "/"
+                << lines[static_cast<std::size_t>(cardIndex)].nodeIds.size();
         }
         drawText(sub.str(), x, 38.0f, 13, kTextDim);
     }
@@ -994,7 +1042,7 @@ void CourseTrainer::renderStudyPanel() {
         }
         drawText(sched.str(), x, statsY + 20.0f, 13, kTextDim);
     } else {
-        drawText("Right/Left step, Up/Down pick a variation, Space next line, Esc chapters",
+        drawText("Right/Left step, Up/Down variation, Space next line, PgUp/PgDn position, Esc chapters",
                  x, statsY + 20.0f, 12, kTextDim);
     }
 }

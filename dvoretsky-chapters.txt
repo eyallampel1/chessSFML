@@ -1,0 +1,25 @@
+# Chapter titles for Dvoretsky's Endgame Manual, for split_pgn_by_chapter.ps1.
+# The export tags its games only "Chapter 7 (2)"; these give the files names
+# that say what they are about.
+#
+# Each was checked against the material in that chapter's own positions rather
+# than taken on trust - chapter 3 is the only one where every position is a
+# knight ending, chapter 9 the only one where every position is a rook ending,
+# and chapters 5 and 6 were told apart by whether the two bishops stand on
+# opposite-coloured squares (5: 55 of 55; 6: 0 of 44).
+
+1  = Pawn Endgames
+2  = Knight versus Pawns
+3  = Knight Endgames
+4  = Bishop versus Pawns
+5  = Opposite-Colored Bishops
+6  = Bishops of the Same Color
+7  = Bishop versus Knight
+8  = Rook versus Pawns
+9  = Rook Endgames
+10 = Rook versus Knight
+11 = Rook versus Bishop
+12 = Queen Endgames
+13 = Queen versus Rook
+14 = Other Material Relations
+15 = General Endgame Ideas

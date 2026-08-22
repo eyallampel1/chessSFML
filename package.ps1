@@ -74,8 +74,25 @@ if (-not (Test-Path $exe)) { throw "LampelChess.exe not found at $exe" }
 # ---------------------------------------------------------------- stage ----
 
 Step "Staging into $stage"
+
+# The staged folder is rebuilt from scratch, but people put their own PGNs in
+# its course/ subfolder and then lose them here. Keep anything already there
+# unless this run is bringing its own.
+$rescued = $null
+$existingCourse = Join-Path $stage "course"
+if ((Test-Path $existingCourse) -and -not $CourseDir) {
+    $rescued = Join-Path $OutDir ".course-keep"
+    if (Test-Path $rescued) { Remove-Item $rescued -Recurse -Force }
+    Move-Item $existingCourse $rescued
+    $keptCount = @(Get-ChildItem $rescued -Filter *.pgn).Count
+    Warn "kept the $keptCount course PGNs already in the package - they will be in the zip too."
+    Warn "delete dist\$appName\course first if this build is going somewhere public."
+}
+
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force $stage | Out-Null
+
+if ($rescued) { Move-Item $rescued $existingCourse }
 
 Copy-Item $exe $stage
 
