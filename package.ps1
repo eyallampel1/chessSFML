@@ -75,24 +75,27 @@ if (-not (Test-Path $exe)) { throw "LampelChess.exe not found at $exe" }
 
 Step "Staging into $stage"
 
-# The staged folder is rebuilt from scratch, but people put their own PGNs in
-# its course/ subfolder and then lose them here. Keep anything already there
-# unless this run is bringing its own.
-$rescued = $null
-$existingCourse = Join-Path $stage "course"
-if ((Test-Path $existingCourse) -and -not $CourseDir) {
-    $rescued = Join-Path $OutDir ".course-keep"
-    if (Test-Path $rescued) { Remove-Item $rescued -Recurse -Force }
-    Move-Item $existingCourse $rescued
-    $keptCount = @(Get-ChildItem $rescued -Filter *.pgn).Count
-    Warn "kept the $keptCount course PGNs already in the package - they will be in the zip too."
-    Warn "delete dist\$appName\course first if this build is going somewhere public."
+# The staged folder is rebuilt from scratch every run, but course/ holds the
+# user's own PGNs and is theirs, not ours. It is carried across the rebuild
+# untouched, always - the try/finally puts it back even if staging throws.
+$courseDest = Join-Path $stage "course"
+$parked = $null
+if (Test-Path $courseDest) {
+    $parked = Join-Path $OutDir ".course-parked"
+    if (Test-Path $parked) { Remove-Item $parked -Recurse -Force }
+    Move-Item $courseDest $parked
 }
 
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force $stage | Out-Null
-
-if ($rescued) { Move-Item $rescued $existingCourse }
+try {
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    New-Item -ItemType Directory -Force $stage | Out-Null
+} finally {
+    if ($parked -and (Test-Path $parked)) {
+        New-Item -ItemType Directory -Force $stage | Out-Null
+        Move-Item $parked $courseDest
+        Write-Host "    kept $(@(Get-ChildItem $courseDest -Filter *.pgn).Count) course PGNs already in the package"
+    }
+}
 
 Copy-Item $exe $stage
 
@@ -178,13 +181,18 @@ if (Test-Path (Join-Path $repo "engines\stockfish.exe")) {
 
 if ($CourseDir) {
     if (-not (Test-Path $CourseDir)) { throw "Course folder not found: $CourseDir" }
-    Step "Bundling course PGNs"
-    $course = Join-Path $stage "course"
-    New-Item -ItemType Directory -Force $course | Out-Null
-    Copy-Item (Join-Path $CourseDir "*.pgn") $course -Force
-    $n = @(Get-ChildItem $course -Filter *.pgn).Count
-    Write-Host "    $n chapters"
-    Warn "Course PGNs are paid material - fine on your own machines, not for redistribution"
+    Step "Adding course PGNs from $CourseDir"
+    New-Item -ItemType Directory -Force $courseDest | Out-Null
+    # Added to whatever is already there rather than replacing it.
+    Copy-Item (Join-Path $CourseDir "*.pgn") $courseDest -Force
+}
+
+$coursePgns = @()
+if (Test-Path $courseDest) {
+    $coursePgns = @(Get-ChildItem $courseDest -Filter *.pgn -ErrorAction SilentlyContinue)
+}
+if ($coursePgns.Count -gt 0) {
+    Write-Host "    course/ holds $($coursePgns.Count) PGNs"
 }
 
 # ---------------------------------------------------------------- notes ----
@@ -244,11 +252,40 @@ $size = (Get-ChildItem $stage -Recurse -File | Measure-Object Length -Sum).Sum
 Step ("Staged {0:N1} MB" -f ($size / 1MB))
 
 if (-not $NoZip) {
-    $zip = Join-Path $OutDir "$appName-$Version-win64.zip"
-    Step "Zipping to $zip"
-    if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
-    Write-Host ("    {0:N1} MB" -f ((Get-Item $zip).Length / 1MB))
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+
+    # Zips are built by picking entries, so the staged folder is never moved or
+    # emptied to shape one. Everything lands under "<appName>/" in the archive,
+    # the way Compress-Archive would have nested it.
+    function New-Package([string]$zipPath, [bool]$withCourse) {
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        $archive = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+        try {
+            $prefixLen = $stage.TrimEnd('\').Length + 1
+            foreach ($f in Get-ChildItem $stage -Recurse -File) {
+                $relative = $f.FullName.Substring($prefixLen)
+                if (-not $withCourse -and $relative -like 'course\*') { continue }
+                $entry = "$appName/" + $relative.Replace('\', '/')
+                [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                    $archive, $f.FullName, $entry,
+                    [System.IO.Compression.CompressionLevel]::Optimal)
+            }
+        } finally {
+            $archive.Dispose()
+        }
+        Write-Host ("    {0}  {1:N1} MB" -f (Split-Path $zipPath -Leaf),
+                                            ((Get-Item $zipPath).Length / 1MB))
+    }
+
+    # The shareable one never contains course material, whatever is staged.
+    Step "Zipping"
+    New-Package (Join-Path $OutDir "$appName-$Version-win64.zip") $false
+
+    # And a second one with it, for your own machines.
+    if ($coursePgns.Count -gt 0) {
+        New-Package (Join-Path $OutDir "$appName-$Version-win64-with-course.zip") $true
+        Warn "the -with-course zip carries $($coursePgns.Count) paid PGNs - keep that one off GitHub"
+    }
 }
 
 Step "Done"

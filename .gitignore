@@ -36,3 +36,8 @@ CON
 
 # Packaged distribution output
 dist/
+
+# Course material (purchased books) - never commit
+course/
+**/course/
+*- By Chapter/
