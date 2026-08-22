@@ -33,6 +33,16 @@ bool isMoveNumberToken(const std::string& t) {
     return i == t.size();
 }
 
+// Not every exporter puts a space after the move number: "1.Ka6" and
+// "2...Kb8" are as common as "1. Ka6". Returns the move on its own.
+std::string stripMoveNumber(const std::string& token) {
+    std::size_t i = 0;
+    while (i < token.size() && std::isdigit(static_cast<unsigned char>(token[i]))) ++i;
+    if (i == 0 || i >= token.size() || token[i] != '.') return token;
+    while (i < token.size() && token[i] == '.') ++i;
+    return (i < token.size()) ? token.substr(i) : token;
+}
+
 // Pulls [%csl Rd6] / [%cal Gd1d8,Re4e5] out of a comment, appending what it
 // finds to `out` and erasing it from the text.
 void extractMarkings(std::string& text, std::vector<Marking>& out) {
@@ -164,67 +174,41 @@ std::string formatMoveNumber(const MoveNode& node, bool forceNumber) {
     return oss.str();
 }
 
-bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
-    // Paths are carried around as UTF-8 (chapter names such as "Grünfeld" have
-    // no representation in the ANSI code page), so widen before opening.
-    std::ifstream input(std::filesystem::u8path(path));
-    if (!input.is_open()) {
-        error = "Unable to open " + path;
+namespace {
+
+// "[Event \"...\"]" and friends. Used to spot where the next game starts, so a
+// line beginning with '[' inside prose is not mistaken for a header.
+bool looksLikeTagPair(const std::string& t) {
+    if (t.size() < 5 || t.front() != '[' || t.back() != ']') return false;
+    std::size_t i = 1;
+    while (i < t.size() && (std::isalnum(static_cast<unsigned char>(t[i])) || t[i] == '_')) ++i;
+    if (i == 1 || i >= t.size() || t[i] != ' ') return false;
+    return t.find('"', i) != std::string::npos;
+}
+
+// Parses one game's movetext into `out`, hanging it off a fresh root sentinel
+// that carries the position the game starts from. `positionAfter` stays index
+// aligned with `out.nodes`.
+bool parseGame(const std::string& movetext, const std::string& startFen,
+               const std::string& label, Chapter& out,
+               std::vector<analysis::HeadlessPosition>& positionAfter,
+               std::string& error) {
+    analysis::HeadlessPosition startPosition;
+    if (!startFen.empty() && !startPosition.setFEN(startFen)) {
+        error = label + ": unreadable FEN \"" + startFen + "\"";
         return false;
     }
 
-    std::string tagEvent, tagAnnotator, tagWhite;
-    std::string movetext;
-    bool inMovetext = false;
-    std::string line;
-    while (std::getline(input, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        const std::string t = trim(line);
-
-        if (!inMovetext) {
-            if (t.empty()) continue;
-            if (t.front() == '[') {
-                const std::size_t space = t.find(' ');
-                const std::size_t q1 = t.find('"');
-                const std::size_t q2 = (q1 == std::string::npos) ? q1 : t.find('"', q1 + 1);
-                if (space != std::string::npos && q2 != std::string::npos) {
-                    const std::string key = t.substr(1, space - 1);
-                    const std::string value = t.substr(q1 + 1, q2 - q1 - 1);
-                    if (key == "Event") tagEvent = value;
-                    else if (key == "Annotator") tagAnnotator = value;
-                    else if (key == "White") tagWhite = value;
-                }
-                continue;
-            }
-        }
-        inMovetext = true;
-        movetext += line;
-        movetext.push_back('\n');
-    }
-
-    out = Chapter{};
-    out.filePath = path;
-    out.annotator = tagAnnotator;
-    out.title = !tagEvent.empty() ? tagEvent
-              : !tagWhite.empty() ? tagWhite
-              : std::filesystem::u8path(path).stem().u8string();
-
-    analysis::HeadlessPosition startPosition;
-
     // Root sentinel: no move, just the starting position.
+    const int rootNode = static_cast<int>(out.nodes.size());
     MoveNode root;
     root.fen = startPosition.getFEN();
     out.nodes.push_back(root);
-
-    // Position reached after each node, kept only while parsing: entering a
-    // variation has to rewind to the branch point's parent, and replaying the
-    // whole path each time would be quadratic.
-    std::vector<analysis::HeadlessPosition> positionAfter;
     positionAfter.push_back(startPosition);
 
     analysis::HeadlessPosition position = startPosition;
     std::vector<ParseFrame> stack;
-    int parentNode = 0;
+    int parentNode = rootNode;
     int lastNode = -1;
     std::string pendingComment;
 
@@ -314,16 +298,29 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
             if (d == '{' || d == '}' || d == '(' || d == ')' || d == '$' || d == ';') break;
             ++j;
         }
-        const std::string token = movetext.substr(i, j - i);
+        const std::string rawToken = movetext.substr(i, j - i);
         i = j;
 
-        if (token.empty()) { ++i; continue; }
-        if (isResultToken(token) || isMoveNumberToken(token)) continue;
-        if (token == "--" || token == "Z0") continue;   // null move, unsupported
+        if (rawToken.empty()) { ++i; continue; }
+        if (isResultToken(rawToken) || isMoveNumberToken(rawToken)) continue;
+
+        const std::string token = stripMoveNumber(rawToken);
+        if (token.empty()) continue;
+        // Null moves ("3.--" as well as bare "--") have no board meaning, and
+        // skipping one would put every later move on the wrong turn, so stop
+        // reading this game here. Must be tested before the punctuation guard
+        // below, which "--" would otherwise fall into.
+        if (token == "--" || token == "Z0") break;
+        // A stray annotation mark on its own ("+" adrift from its move) is
+        // punctuation, not a move.
+        if (!std::any_of(token.begin(), token.end(),
+                         [](unsigned char c) { return std::isalnum(c) != 0; })) {
+            continue;
+        }
 
         analysis::Move move;
         if (!position.decodeSan(token, move)) {
-            error = out.title + ": could not play '" + token + "' at ply " +
+            error = label + ": could not play '" + token + "' at ply " +
                     std::to_string(out.nodes[static_cast<std::size_t>(parentNode)].ply + 1);
             return false;
         }
@@ -350,59 +347,177 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
         lastNode = id;
     }
 
-    out.introComment = out.nodes[0].comment;
-    out.loaded = out.nodes.size() > 1;
-    if (!out.loaded) {
-        error = out.title + ": no moves found";
+    // A header with no moves - an endgame manual has a few - is not an error,
+    // there is just nothing to study, so drop the empty root again.
+    if (out.nodes.size() == static_cast<std::size_t>(rootNode) + 1) {
+        out.nodes.pop_back();
+        positionAfter.pop_back();
+        return true;
+    }
+
+    out.gameRoots.push_back(rootNode);
+    out.gameLabels.push_back(label);
+    return true;
+}
+
+} // namespace
+
+bool loadChapter(const std::string& path, Chapter& out, std::string& error) {
+    // Paths are carried around as UTF-8 (chapter names such as "Grünfeld" have
+    // no representation in the ANSI code page), so widen before opening.
+    std::ifstream input(std::filesystem::u8path(path));
+    if (!input.is_open()) {
+        error = "Unable to open " + path;
         return false;
     }
+
+    out = Chapter{};
+    out.filePath = path;
+
+    // Position reached after each node, kept only while parsing: entering a
+    // variation has to rewind to the branch point's parent, and replaying the
+    // whole path each time would be quadratic.
+    std::vector<analysis::HeadlessPosition> positionAfter;
+
+    std::string tagEvent, tagAnnotator, tagWhite, tagSite, tagFen;
+    std::string movetext;
+    bool inMovetext = false;
+    std::string firstError;
+    std::size_t gameCount = 0;
+    std::size_t failed = 0;
+
+    auto finishGame = [&]() {
+        if (!inMovetext && tagEvent.empty() && tagFen.empty()) return;
+        ++gameCount;
+
+        if (out.title.empty()) {
+            out.title = !tagEvent.empty() ? tagEvent
+                      : !tagWhite.empty() ? tagWhite
+                      : std::filesystem::u8path(path).stem().u8string();
+        }
+        if (out.annotator.empty()) out.annotator = tagAnnotator;
+
+        // A collection numbers its games per chapter, so "Game 16" occurs
+        // dozens of times; the Event tag is what tells them apart.
+        std::string label;
+        if (!tagEvent.empty() && !tagSite.empty())  label = tagEvent + " " + tagSite;
+        else if (!tagSite.empty())                  label = tagSite;
+        else if (!tagEvent.empty())                 label = tagEvent;
+        else                                        label = "Game " + std::to_string(gameCount);
+        std::string err;
+        if (!parseGame(movetext, tagFen, label, out, positionAfter, err)) {
+            // One unreadable game in a large collection should not cost the
+            // reader the other sixteen hundred.
+            ++failed;
+            if (firstError.empty()) firstError = err;
+        }
+
+        tagEvent.clear(); tagAnnotator.clear(); tagWhite.clear();
+        tagSite.clear(); tagFen.clear();
+        movetext.clear();
+        inMovetext = false;
+    };
+
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const std::string t = trim(line);
+
+        if (looksLikeTagPair(t)) {
+            if (inMovetext) finishGame();   // this header starts the next game
+
+            const std::size_t space = t.find(' ');
+            const std::size_t q1 = t.find('"');
+            const std::size_t q2 = (q1 == std::string::npos) ? q1 : t.find('"', q1 + 1);
+            if (space != std::string::npos && q2 != std::string::npos) {
+                const std::string key = t.substr(1, space - 1);
+                const std::string value = t.substr(q1 + 1, q2 - q1 - 1);
+                if (key == "Event") tagEvent = value;
+                else if (key == "Annotator") tagAnnotator = value;
+                else if (key == "White") tagWhite = value;
+                else if (key == "Site") tagSite = value;
+                else if (key == "FEN") tagFen = value;
+            }
+            continue;
+        }
+        if (t.empty() && !inMovetext) continue;
+
+        inMovetext = true;
+        movetext += line;
+        movetext.push_back('\n');
+    }
+    finishGame();
+
+    // A collection spans many Events, so the first one is a poor name for the
+    // whole file; only a single-game file is fairly described by its own tag.
+    if (out.title.empty() || gameCount > 1) {
+        out.title = std::filesystem::u8path(path).stem().u8string();
+    }
+
+    out.loaded = !out.gameRoots.empty();
+    if (!out.loaded) {
+        error = out.title + ": no playable games found"
+              + (firstError.empty() ? std::string() : " (" + firstError + ")");
+        return false;
+    }
+    if (failed > 0) {
+        error = std::to_string(failed) + " of " + std::to_string(gameCount) +
+                " games skipped (" + firstError + ")";
+    }
+
+    out.introComment = out.nodes[static_cast<std::size_t>(out.gameRoots.front())].comment;
     return true;
 }
 
 std::vector<Line> enumerateLines(const Chapter& chapter) {
     std::vector<Line> lines;
-    if (chapter.nodes.size() < 2) return lines;
 
-    // Iterative DFS: children pushed in reverse so the main line comes first.
-    struct Step { int node; bool entering; };
-    std::vector<Step> work{{0, true}};
-    std::vector<int> path;
+    // Every game in the file contributes its own root-to-leaf paths.
+    for (int root : chapter.gameRoots) {
+        // Iterative DFS: children pushed in reverse so the main line comes first.
+        struct Step { int node; bool entering; };
+        std::vector<Step> work{{root, true}};
+        std::vector<int> path;
 
-    while (!work.empty()) {
-        const Step step = work.back();
-        work.pop_back();
+        while (!work.empty()) {
+            const Step step = work.back();
+            work.pop_back();
 
-        if (!step.entering) {
-            path.pop_back();
-            continue;
-        }
-
-        const MoveNode& node = chapter.nodes[static_cast<std::size_t>(step.node)];
-        if (step.node != 0) path.push_back(step.node);
-
-        if (node.children.empty()) {
-            if (!path.empty()) {
-                Line line;
-                line.nodeIds = path;
-                line.id = makeLineId(chapter, path);
-                lines.push_back(std::move(line));
+            if (!step.entering) {
+                path.pop_back();
+                continue;
             }
-            if (step.node != 0) path.pop_back();
-            continue;
-        }
 
-        if (step.node != 0) work.push_back(Step{step.node, false});
-        for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
-            work.push_back(Step{*it, true});
+            const MoveNode& node = chapter.nodes[static_cast<std::size_t>(step.node)];
+            if (step.node != root) path.push_back(step.node);
+
+            if (node.children.empty()) {
+                if (!path.empty()) {
+                    Line line;
+                    line.nodeIds = path;
+                    line.root = root;
+                    line.id = makeLineId(chapter, root, path);
+                    lines.push_back(std::move(line));
+                }
+                if (step.node != root) path.pop_back();
+                continue;
+            }
+
+            if (step.node != root) work.push_back(Step{step.node, false});
+            for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
+                work.push_back(Step{*it, true});
+            }
         }
     }
     return lines;
 }
 
-std::string makeLineId(const Chapter& chapter, const std::vector<int>& nodeIds) {
-    // FNV-1a over the chapter title plus the moves. Node indices would not
-    // survive a re-parse; the move list does, and it changes if the author
-    // edits the line - which is exactly when the card should reset.
+std::string makeLineId(const Chapter& chapter, int root, const std::vector<int>& nodeIds) {
+    // FNV-1a over the chapter title, the starting position and the moves. Node
+    // indices would not survive a re-parse; this does, and it changes if the
+    // author edits the line - which is exactly when the card should reset. The
+    // starting FEN matters because an endgame manual plays the same short
+    // sequences from many different positions.
     std::uint64_t hash = 1469598103934665603ULL;
     auto feed = [&hash](const std::string& s) {
         for (unsigned char ch : s) {
@@ -413,6 +528,7 @@ std::string makeLineId(const Chapter& chapter, const std::vector<int>& nodeIds) 
         hash *= 1099511628211ULL;
     };
     feed(chapter.title);
+    feed(chapter.nodes[static_cast<std::size_t>(root)].fen);
     for (int id : nodeIds) feed(chapter.nodes[static_cast<std::size_t>(id)].uci);
 
     char buf[32];

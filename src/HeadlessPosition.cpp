@@ -145,18 +145,15 @@ char HeadlessPosition::rankChar(int rank) {
 }
 
 std::string HeadlessPosition::normalizeSan(const std::string& san) {
+    // Check, mate and annotation marks say nothing about which move was made,
+    // and they are not always where they belong - a stray "gxf+3" for "gxf3+"
+    // turns up in exported collections - so drop them wherever they appear.
     std::string trimmed;
     trimmed.reserve(san.size());
     for (char c : san) {
-        if (!std::isspace(static_cast<unsigned char>(c))) trimmed.push_back(c);
-    }
-    while (!trimmed.empty()) {
-        char last = trimmed.back();
-        if (last == '+' || last == '#' || last == '!' || last == '?') {
-            trimmed.pop_back();
-        } else {
-            break;
-        }
+        if (std::isspace(static_cast<unsigned char>(c))) continue;
+        if (c == '+' || c == '#' || c == '!' || c == '?') continue;
+        trimmed.push_back(c);
     }
     return trimmed;
 }
@@ -336,10 +333,14 @@ bool HeadlessPosition::resolveStandardSan(const std::string& san, Move& move) co
             candidate.isEnPassant = true;
         }
 
-        if (!capture && targetOccupied) continue;
-        if (capture && !candidate.isEnPassant) {
-            if (targetOccupied && targetPiece.color == mover) continue;
-            if (!targetOccupied) continue;
+        if (targetOccupied && targetPiece.color == mover) continue;
+
+        // Whether this is a capture is decided by the board, not the notation:
+        // some exports drop the 'x' and write "Be2" where they mean "Bxe2".
+        if (targetOccupied) {
+            candidate.isCapture = true;
+        } else if (capture && !candidate.isEnPassant) {
+            continue;   // an 'x' with nothing on the square to take
         }
 
         if (wouldLeaveKingInCheck(candidate)) {

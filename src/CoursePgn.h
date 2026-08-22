@@ -41,14 +41,23 @@ struct Chapter {
     std::string filePath;
     std::string annotator;
     std::string introComment;   // text before the very first move
+
+    // A course file may hold one game (an opening chapter) or many (an endgame
+    // manual, where each game is a position to study). Every game contributes
+    // a root sentinel to `nodes` carrying its starting FEN, so games that begin
+    // from different positions can share one flat node array.
     std::vector<MoveNode> nodes;
+    std::vector<int> gameRoots;
+    std::vector<std::string> gameLabels;   // "Game 12", from the Site/Black tag
+
     bool loaded = false;
 };
 
-// A single root-to-leaf path through the tree: one thing to memorise.
+// A single root-to-leaf path through one game's tree: one thing to memorise.
 struct Line {
     std::string id;             // stable across re-parses of the same PGN
     std::vector<int> nodeIds;   // tree nodes, root excluded
+    int root = 0;               // the game this line belongs to
 };
 
 // Reads one chapter PGN. Only the first game in the file is used; course
@@ -59,8 +68,10 @@ bool loadChapter(const std::string& path, Chapter& out, std::string& error);
 // author wrote them.
 std::vector<Line> enumerateLines(const Chapter& chapter);
 
-// Stable id for a line: chapter title plus the moves that make it up.
-std::string makeLineId(const Chapter& chapter, const std::vector<int>& nodeIds);
+// Stable id for a line: chapter title, the position it starts from, and the
+// moves that make it up. An endgame manual repeats short move sequences from
+// many different positions, so the starting FEN has to be part of the identity.
+std::string makeLineId(const Chapter& chapter, int root, const std::vector<int>& nodeIds);
 
 // Turns the author's raw annotation into something renderable: markdown and
 // the [%csl]/[%cal] drawing commands come out, "[--]" becomes a blank line.

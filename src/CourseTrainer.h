@@ -202,8 +202,11 @@ private:
     void refreshChapterStats();
 
     // board <-> tree
-    void rebuildBoard(std::size_t moveCount);
-    int currentNode() const { return path.empty() ? 0 : path.back(); }
+    // Which game of the chapter is on the board, and where inside it we are.
+    // A collection holds many games, each starting from its own position.
+    int currentRoot = 0;
+    int currentNode() const { return path.empty() ? currentRoot : path.back(); }
+    void setUpGame(int root);   // puts the game's starting position on the board
     const course::MoveNode& node(int id) const { return chapter.nodes[static_cast<std::size_t>(id)]; }
 
     // learn

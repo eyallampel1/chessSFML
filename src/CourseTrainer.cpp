@@ -205,11 +205,6 @@ bool CourseTrainer::openChapter(int index) {
     chapterIndex = index;
     chapterLineCounts[static_cast<std::size_t>(index)] = lines.size();
 
-    heroIsWhite = true;
-    if (!chapter.nodes[0].children.empty()) {
-        heroIsWhite = node(chapter.nodes[0].children[0]).byWhite;
-    }
-
     screen = Screen::Study;
     path.clear();
     variationCursor = 0;
@@ -219,7 +214,7 @@ bool CourseTrainer::openChapter(int index) {
     lineComplete = false;
     feedback.clear();
     annotationCache.source.clear();
-    rebuildBoard(0);
+    setUpGame(chapter.gameRoots.empty() ? 0 : chapter.gameRoots.front());
 
     if (mode == Mode::Drill) {
         startCard(pickNextCard());
@@ -233,16 +228,22 @@ bool CourseTrainer::openChapter(int index) {
 
 // --- board synchronisation --------------------------------------------------
 
-void CourseTrainer::rebuildBoard(std::size_t moveCount) {
-    board->reset();
-    const std::vector<int>& ids = (mode == Mode::Drill && cardIndex >= 0)
-                                ? lines[static_cast<std::size_t>(cardIndex)].nodeIds
-                                : path;
-    for (std::size_t i = 0; i < moveCount && i < ids.size(); ++i) {
-        board->setNextProgrammaticAnimation(1.0f, 0.0f);
-        board->applyUCIMove(node(ids[i]).uci);
-    }
+// Puts a game's starting position on the board. Opening chapters start from
+// the initial position; an endgame collection gives every game its own FEN.
+void CourseTrainer::setUpGame(int root) {
+    currentRoot = root;
+    path.clear();
+    variationCursor = 0;
+    annotationCache.source.clear();
+
+    const std::string& fen = node(root).fen;
+    if (fen.empty() || !board->setFEN(fen)) board->reset();
+
+    // Whoever moves first in this game is the side the student plays.
+    heroIsWhite = true;
+    if (!node(root).children.empty()) heroIsWhite = node(node(root).children[0]).byWhite;
 }
+
 
 // --- learn mode -------------------------------------------------------------
 
@@ -306,11 +307,11 @@ void CourseTrainer::gotoLine(int index) {
     if (lines.empty()) return;
     const int n = static_cast<int>(lines.size());
     learnLineIndex = ((index % n) + n) % n;
-    path = lines[static_cast<std::size_t>(learnLineIndex)].nodeIds;
-    variationCursor = 0;
-    annotationCache.source.clear();
+    const course::Line& line = lines[static_cast<std::size_t>(learnLineIndex)];
 
-    board->reset();
+    // The next line may belong to a different game, with its own start position.
+    setUpGame(line.root);
+    path = line.nodeIds;
     for (int id : path) {
         board->setNextProgrammaticAnimation(1.0f, 0.0f);
         board->applyUCIMove(node(id).uci);
@@ -369,7 +370,9 @@ void CourseTrainer::startCard(int index) {
     }
     lastCardIndex = cardIndex;
 
-    board->reset();
+    // Each card carries the game it came from, so the board starts from that
+    // game's position rather than always from the initial one.
+    setUpGame(lines[static_cast<std::size_t>(cardIndex)].root);
     autoPlayOpponent();
 
     const std::size_t total = lines[static_cast<std::size_t>(cardIndex)].nodeIds.size();
@@ -428,7 +431,7 @@ void CourseTrainer::onUserMove() {
     }
 
     // Did they play one of the author's other suggestions from this position?
-    const int parent = (drillPos == 0) ? 0 : ids[drillPos - 1];
+    const int parent = (drillPos == 0) ? currentRoot : ids[drillPos - 1];
     for (int sibling : node(parent).children) {
         if (sibling == ids[drillPos]) continue;
         if (sameMove(played, node(sibling).uci)) {
@@ -951,10 +954,10 @@ void CourseTrainer::renderStudyPanel() {
 
     // The move that was just played, then whatever the author wrote about it.
     const int cur = (mode == Mode::Drill && cardIndex >= 0)
-                  ? (drillPos > 0 ? lines[static_cast<std::size_t>(cardIndex)].nodeIds[drillPos - 1] : 0)
+                  ? (drillPos > 0 ? lines[static_cast<std::size_t>(cardIndex)].nodeIds[drillPos - 1] : currentRoot)
                   : currentNode();
 
-    if (cur != 0) {
+    if (cur != currentRoot) {
         drawText(toDisplay(course::formatMoveNumber(node(cur), true)), x, y, 20, kAccent, true);
         y += 30.0f;
     }
@@ -1032,13 +1035,13 @@ float CourseTrainer::renderEngineLines(float x, float y) {
 void CourseTrainer::renderAnnotation(float x, float y, float width, float maxY) {
     int cur;
     if (mode == Mode::Drill && cardIndex >= 0) {
-        cur = drillPos > 0 ? lines[static_cast<std::size_t>(cardIndex)].nodeIds[drillPos - 1] : 0;
+        cur = drillPos > 0 ? lines[static_cast<std::size_t>(cardIndex)].nodeIds[drillPos - 1] : currentRoot;
     } else {
         cur = currentNode();
     }
 
-    std::string text = (cur == 0) ? chapter.introComment : node(cur).comment;
-    if (text.empty() && cur == 0) {
+    std::string text = (cur == currentRoot) ? node(currentRoot).comment : node(cur).comment;
+    if (text.empty() && cur == currentRoot) {
         text = (mode == Mode::Learn)
              ? "Press Right (or Next) to start walking the chapter."
              : "Play the first move of the line on the board.";
@@ -1150,7 +1153,7 @@ void CourseTrainer::renderMoveTree() {
 void CourseTrainer::renderMarkings() {
     int cur;
     if (mode == Mode::Drill && cardIndex >= 0) {
-        cur = drillPos > 0 ? lines[static_cast<std::size_t>(cardIndex)].nodeIds[drillPos - 1] : 0;
+        cur = drillPos > 0 ? lines[static_cast<std::size_t>(cardIndex)].nodeIds[drillPos - 1] : currentRoot;
     } else {
         cur = currentNode();
     }
@@ -1178,7 +1181,7 @@ void CourseTrainer::renderMarkings() {
         }
     }
 
-    if (cur == 0) return;
+    if (cur == currentRoot) return;
     for (const course::Marking& m : node(cur).markings) {
         if (m.to.empty()) {
             sf::CircleShape ring(19.0f);
